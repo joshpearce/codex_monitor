@@ -28,3 +28,10 @@ RUN_CODEX_GOAL_INTEGRATION=1 \
 CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1 \
 .test-venv/bin/pytest -m integration -s tests/integration/test_canned_approval_goal.py
 ```
+
+Failed or interrupted live runs retain their Codex threads for diagnosis. Remove only these disposable
+threads and their pytest project directories with:
+
+```sh
+.test-venv/bin/python scripts/cleanup-integration-sessions.py
+```
