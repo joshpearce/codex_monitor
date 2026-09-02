@@ -95,6 +95,8 @@ It copies a tiny standard-library JSON-formatter project to a temporary director
 durable Goal, waits for the mandatory Claude Opus review to reach its explicit-authorization gate, and
 then verifies that the monitor's generic canned approval resumes the Goal into review. It is skipped by
 default because a successful run sends the disposable project to Claude and consumes subscription quota.
+The harness also covers a known second blocker where a sandboxed Claude process cannot access the user's
+credentials; see [`docs/failure-cases.md`](docs/failure-cases.md).
 
 ```sh
 RUN_CODEX_GOAL_INTEGRATION=1 \

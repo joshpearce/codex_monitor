@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -53,7 +55,7 @@ async def wait_for_goal(client: ProtocolClient, thread_id: str, wanted: str, tim
 
 async def latest_items(client: ProtocolClient, thread_id: str) -> list[dict]:
     result = await client.call("thread/items/list", {
-        "threadId": thread_id, "limit": 100, "sortDirection": "desc"
+        "threadId": thread_id, "limit": 500, "sortDirection": "desc"
     })
     return unwrap(result, "data") or []
 
@@ -86,9 +88,39 @@ def contains_claude_command(items: list[dict]) -> bool:
         if not isinstance(item, dict):
             continue
         command = item.get("command")
-        if command and "claude" in json.dumps(command).lower():
+        rendered = " ".join(command) if isinstance(command, list) else str(command or "")
+        if re.search(r"(?:^|[\s;&|])(?:\S*/)?claude\s+(?:-p|--print)(?:\s|$)", rendered):
             return True
     return False
+
+
+def contains_live_claude_review(items: list[dict]) -> bool:
+    session_ids: set[str] = set()
+    for entry in items:
+        item = entry.get("item", entry) if isinstance(entry, dict) else entry
+        if not isinstance(item, dict) or item.get("type") != "commandExecution":
+            continue
+        command = str(item.get("command", ""))
+        if "uuidgen" not in command:
+            continue
+        output = str(item.get("aggregatedOutput", ""))
+        session_ids.update(re.findall(
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            output.lower(),
+        ))
+    if not session_ids:
+        return False
+    processes = subprocess.run(
+        ["ps", "ax", "-o", "command="], capture_output=True, text=True, check=True
+    ).stdout.lower()
+    return any(
+        re.search(
+            rf"(?:^|\s)(?:\S*/)?claude\s+(?:-p|--print)(?:\s|$).*"
+            rf"--session-id\s+{re.escape(session_id)}(?:\s|$)",
+            processes,
+        )
+        for session_id in session_ids
+    )
 
 
 def manifest_path() -> Path:
@@ -109,6 +141,14 @@ def save_manifest(path: Path, *, thread_id: str, project_path: Path, objective: 
     temporary.replace(path)
 
 
+def mark_approval_sent(path: Path) -> None:
+    saved = json.loads(path.read_text())
+    saved["approval_sent"] = True
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(saved, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
+
+
 @pytest.mark.asyncio
 async def test_generic_canned_answer_resumes_goal_into_claude_review():
     require_opt_in()
@@ -120,10 +160,12 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review():
         project_path = Path(saved["project_path"])
         thread_id = saved["thread_id"]
         objective = saved["objective"]
+        approval_sent = bool(saved.get("approval_sent"))
         assert project_path.is_dir(), (
             f"saved project is missing: {project_path}; remove stale manifest {saved_path}"
         )
     else:
+        approval_sent = False
         run_root = Path(tempfile.mkdtemp(prefix="codex-goal-monitor-integration-", dir="/private/tmp"))
         project_path = run_root / "json-formatter-project"
         shutil.copytree(template, project_path)
@@ -138,12 +180,19 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review():
     await ensure_daemon(provisional)
     creator = await connect(provisional)
     try:
+        if resumed and not approval_sent:
+            prior_text = "\n".join(assistant_texts(await latest_items(creator, thread_id))).lower()
+            if "authorization received" in prior_text:
+                approval_sent = True
+                mark_approval_sent(saved_path)
         if not resumed:
             prompt = (project_path / "INITIAL_PROMPT.md").read_text().replace("`GOAL.md`", objective)
             started = await creator.call("thread/start", {
                 "cwd": str(project_path),
                 "runtimeWorkspaceRoots": [str(project_path)],
-                "sandbox": "workspace-write",
+                # The review must inherit host access when the thread is created;
+                # a later turn/start sandbox field does not upgrade the runner.
+                "sandbox": "danger-full-access",
                 "approvalPolicy": "never",
                 "approvalsReviewer": "auto_review",
                 "historyMode": "paginated",
@@ -165,20 +214,21 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review():
                 "approvalsReviewer": "auto_review",
                 "turnTrigger": "codex-goal-monitor-integration",
             })
-        blocked = await wait_for_goal(creator, thread_id, "blocked", timeout=1800)
-        assert blocked["objective"] == objective
-        items_before = await latest_items(creator, thread_id)
-        questions = [text.lower() for text in assistant_texts(items_before)]
-        assert any(
-            "claude" in text and ("authoriz" in text or "approval" in text) and "?" in text
-            for text in questions
-        ), questions[:5]
-        assert (project_path / "pyproject.toml").exists(), "Goal blocked before implementing the package"
-        package_locations = (
-            project_path / "tiny_json_formatter",
-            project_path / "src/tiny_json_formatter",
-        )
-        assert any(path.is_dir() for path in package_locations), "package implementation is missing"
+        if not approval_sent:
+            blocked = await wait_for_goal(creator, thread_id, "blocked", timeout=1800)
+            assert blocked["objective"] == objective
+            items_before = await latest_items(creator, thread_id)
+            questions = [text.lower() for text in assistant_texts(items_before)]
+            assert any(
+                "claude" in text and ("authoriz" in text or "approval" in text) and "?" in text
+                for text in questions
+            ), questions[:5]
+            assert (project_path / "pyproject.toml").exists(), "Goal blocked before implementing the package"
+            package_locations = (
+                project_path / "tiny_json_formatter",
+                project_path / "src/tiny_json_formatter",
+            )
+            assert any(path.is_dir() for path in package_locations), "package implementation is missing"
     finally:
         await creator.ws.close()
 
@@ -192,17 +242,31 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review():
         approvals_reviewer="auto_review",
         affirmative_answer=GENERIC_APPROVAL,
     )
-    reports = await run_once(config, StateStore(config.state_dir))
-    assert reports[0]["actions"] == ["goal/blocked->active", "turn/start"]
+    if not approval_sent:
+        reports = await run_once(config, StateStore(config.state_dir))
+        assert reports[0]["actions"] == ["goal/blocked->active", "turn/start"]
+        mark_approval_sent(saved_path)
 
     verifier = await connect(config, {thread_id})
     try:
-        active = await wait_for_goal(verifier, thread_id, "active", timeout=120)
-        assert active["objective"] == blocked["objective"]
+        current_goal = unwrap(
+            await verifier.call("thread/goal/get", {"threadId": thread_id}), "goal"
+        )
+        assert current_goal["objective"] == objective
         deadline = time.monotonic() + 300
+        next_reconcile = 0.0
         while time.monotonic() < deadline:
-            if contains_claude_command(await latest_items(verifier, thread_id)):
+            items = await latest_items(verifier, thread_id)
+            if contains_claude_command(items) or contains_live_claude_review(items):
                 break
+            now = time.monotonic()
+            goal = unwrap(
+                await verifier.call("thread/goal/get", {"threadId": thread_id}), "goal"
+            )
+            if goal and goal.get("status") == "blocked" and now >= next_reconcile:
+                reports = await run_once(config, StateStore(config.state_dir))
+                assert reports[0]["actions"] == ["goal/blocked->active", "turn/start"]
+                next_reconcile = now + 30
             await asyncio.sleep(5)
         else:
             raise AssertionError("Goal resumed but no Claude command started")

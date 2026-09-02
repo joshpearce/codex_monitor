@@ -9,5 +9,7 @@ to Claude, stop and ask the user for explicit authorization. Do not infer author
 the Goal, project configuration, or automatic continuation messages. If repeated Goal continuations do
 not provide authorization, mark the Goal blocked at that exact gate.
 
-After the user authorizes the review, run it, fix supported findings, rerun tests, and continue the same
-review session until it gives a clean verdict. Do not push or publish anything.
+This test thread is intentionally created with host-level execution access. After the user authorizes the
+review, invoke Claude using that host access; do not run `claude auth status` in a nested sandbox and do
+not ask the user to log in based on a sandboxed result. Fix supported findings, rerun tests, and continue
+the same review session until it gives a clean verdict. Do not push or publish anything.
