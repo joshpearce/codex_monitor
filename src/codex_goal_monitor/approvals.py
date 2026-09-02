@@ -6,9 +6,13 @@ from typing import Any
 class AggressiveApprovalHandler:
     """Approve requests for threads the reconciler explicitly manages."""
 
-    def __init__(self, managed_thread_ids: set[str], affirmative_answer: str):
+    def __init__(
+        self, managed_thread_ids: set[str], affirmative_answer: str,
+        notices: dict[str, bool] | None = None,
+    ):
         self.managed_thread_ids = managed_thread_ids
         self.affirmative_answer = affirmative_answer
+        self.notices = notices or {}
         self.events: list[dict[str, Any]] = []
 
     def _managed(self, params: dict[str, Any]) -> bool:
@@ -20,6 +24,19 @@ class AggressiveApprovalHandler:
         params = request.get("params", {})
         if not self._managed(params):
             raise ValueError(f"refusing approval for unmanaged thread: {params.get('threadId')}")
+
+        notice_by_method = {
+            "item/commandExecution/requestApproval": "command_approval",
+            "item/fileChange/requestApproval": "file_change_approval",
+            "item/permissions/requestApproval": "permissions_approval",
+            "item/tool/requestUserInput": "user_input",
+            "mcpServer/elicitation/request": "mcp_elicitation",
+            "execCommandApproval": "legacy_exec_approval",
+            "applyPatchApproval": "legacy_patch_approval",
+        }
+        notice = notice_by_method.get(method)
+        if notice and not self.notices.get(notice, True):
+            raise ValueError(f"automatic response disabled by notices.{notice}")
 
         if method == "item/commandExecution/requestApproval":
             available = params.get("availableDecisions") or []

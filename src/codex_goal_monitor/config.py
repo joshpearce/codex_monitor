@@ -6,6 +6,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+NOTICE_DEFAULTS = {
+    "daemon_unavailable": True,
+    "overlapping_run": True,
+    "unloaded_thread": True,
+    "paused_goal": True,
+    "blocked_goal": True,
+    "usage_limited_goal": True,
+    "budget_limited_goal": True,
+    "idle_active_goal": True,
+    "active_thread": True,
+    "complete_goal": True,
+    "missing_or_disabled_goal": True,
+    "objective_mismatch": True,
+    "natural_language_approval": True,
+    "claude_sandbox_auth": True,
+    "command_approval": True,
+    "file_change_approval": True,
+    "permissions_approval": True,
+    "user_input": True,
+    "mcp_elicitation": True,
+    "legacy_exec_approval": True,
+    "legacy_patch_approval": True,
+    "repeated_blocker": True,
+}
+
+
 @dataclass(frozen=True)
 class Project:
     name: str
@@ -31,6 +57,10 @@ class Config:
         "Yes. I authorize the requested action and any necessary follow-up actions "
         "needed to continue this goal. Continue working toward the full goal."
     )
+    notices: dict[str, bool] | None = None
+
+    def notice_enabled(self, name: str) -> bool:
+        return (self.notices or NOTICE_DEFAULTS).get(name, True)
 
 
 def default_config_path() -> Path:
@@ -45,6 +75,21 @@ def load_config(path: Path | None = None) -> Config:
         raise ValueError(f"{path}: version must be 1")
 
     defaults = raw.get("defaults", {})
+    configured_notices = raw.get("notices", {})
+    unknown_notices = set(configured_notices) - set(NOTICE_DEFAULTS)
+    if unknown_notices:
+        raise ValueError(f"{path}: unknown [notices] keys: {', '.join(sorted(unknown_notices))}")
+    non_boolean_notices = [
+        name for name, value in configured_notices.items() if not isinstance(value, bool)
+    ]
+    if non_boolean_notices:
+        raise ValueError(
+            f"{path}: [notices] values must be booleans: "
+            f"{', '.join(sorted(non_boolean_notices))}"
+        )
+    notices = {**NOTICE_DEFAULTS, **{
+        name: bool(value) for name, value in configured_notices.items()
+    }}
     projects = []
     for entry in raw.get("project", []):
         project_path = Path(entry["path"]).expanduser().resolve()
@@ -76,4 +121,5 @@ def load_config(path: Path | None = None) -> Config:
         approval_policy=defaults.get("approval_policy"),
         approvals_reviewer=defaults.get("approvals_reviewer"),
         affirmative_answer=str(defaults.get("affirmative_answer", Config.__dataclass_fields__["affirmative_answer"].default)),
+        notices=notices,
     )

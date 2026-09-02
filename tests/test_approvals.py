@@ -37,3 +37,16 @@ async def test_answers_first_user_input_option():
         },
     })
     assert result == {"answers": {"send": {"answers": ["Approve"]}}}
+
+
+@pytest.mark.asyncio
+async def test_disabled_protocol_notice_leaves_request_waiting():
+    handler = AggressiveApprovalHandler(
+        {"managed"}, "yes", {"command_approval": False}
+    )
+    with pytest.raises(ValueError, match="notices.command_approval"):
+        await handler({
+            "id": 4,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "managed"},
+        })

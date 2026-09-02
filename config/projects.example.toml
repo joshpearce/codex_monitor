@@ -2,6 +2,32 @@ version = 1
 drain_seconds = 15
 continuation_cooldown_seconds = 240
 
+# Every handled condition defaults to true. Set an entry to false to leave that
+# condition untouched (or reject that protocol-level automatic response).
+[notices]
+daemon_unavailable = true
+overlapping_run = true
+unloaded_thread = true
+paused_goal = true
+blocked_goal = true
+usage_limited_goal = true
+budget_limited_goal = true
+idle_active_goal = true
+active_thread = true
+complete_goal = true
+missing_or_disabled_goal = true
+objective_mismatch = true
+natural_language_approval = true
+claude_sandbox_auth = true
+command_approval = true
+file_change_approval = true
+permissions_approval = true
+user_input = true
+mcp_elicitation = true
+legacy_exec_approval = true
+legacy_patch_approval = true
+repeated_blocker = true
+
 # Normally omit these: each trusted project's .codex/config.toml should contain
 # approval_policy = "never" and approvals_reviewer = "auto_review".
 # Set them here only if the reconciler should force overrides while resuming.

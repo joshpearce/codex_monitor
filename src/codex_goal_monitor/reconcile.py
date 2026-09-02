@@ -119,19 +119,29 @@ class Reconciler:
 
         if not project.ensure_goal_running or not goal:
             report["result"] = "disabled-or-no-goal"
+            if not self.config.notice_enabled("missing_or_disabled_goal"):
+                report["result"] = "notice-disabled"
             return await self._finish_report(report, started)
-        if project.goal_objective and goal.get("objective") != project.goal_objective:
+        if (
+            self.config.notice_enabled("objective_mismatch")
+            and project.goal_objective and goal.get("objective") != project.goal_objective
+        ):
             raise RuntimeError(
                 f"{project.name}: objective mismatch: expected {project.goal_objective!r}, "
                 f"found {goal.get('objective')!r}"
             )
         goal_status = goal.get("status")
         if goal_status == "complete":
-            report["result"] = "complete"
+            report["result"] = (
+                "complete" if self.config.notice_enabled("complete_goal") else "notice-disabled"
+            )
             return await self._finish_report(report, started)
 
         is_loaded = project.thread_id in loaded_ids(loaded_result) and status_type(thread) != "notLoaded"
         if not is_loaded:
+            if not self.config.notice_enabled("unloaded_thread"):
+                report["result"] = "notice-disabled"
+                return await self._finish_report(report, started)
             params = {"threadId": project.thread_id, "excludeTurns": True, **overrides(self.config)}
             await self.client.call("thread/resume", params)
             report["actions"].append("thread/resume")
@@ -146,25 +156,44 @@ class Reconciler:
             goal = after_goal
             goal_status = goal.get("status")
 
-        if goal_status in RECOVERABLE_GOAL_STATUSES:
+        status_notice = {
+            "paused": "paused_goal",
+            "blocked": "blocked_goal",
+            "usageLimited": "usage_limited_goal",
+            "budgetLimited": "budget_limited_goal",
+        }.get(goal_status)
+        recovery_enabled = not status_notice or self.config.notice_enabled(status_notice)
+        if goal_status in RECOVERABLE_GOAL_STATUSES and recovery_enabled:
             await self.client.call("thread/goal/set", {"threadId": project.thread_id, "status": "active"})
             report["actions"].append(f"goal/{goal_status}->active")
+        elif goal_status in RECOVERABLE_GOAL_STATUSES:
+            report["result"] = "notice-disabled"
+            return await self._finish_report(report, started)
 
         thread_state = status_type(thread)
         needs_authorization = goal_status in {"paused", "blocked"}
         # turn/start also steers an already-active turn. This matters because
         # goal/set(active) can synchronously start an automatic continuation;
         # the authorization must be injected into that turn rather than lost.
-        should_send = thread_state != "active" or needs_authorization
+        should_send = (
+            (thread_state != "active" and self.config.notice_enabled("idle_active_goal"))
+            or needs_authorization
+        )
         if should_send and self._cooldown_elapsed(project.thread_id):
             last_text = await self._last_assistant_text(project.thread_id)
             fingerprint = blocker_fingerprint(last_text) if last_text else None
-            claude_host_recovery = looks_like_claude_sandbox_auth_failure(last_text)
+            claude_host_recovery = (
+                self.config.notice_enabled("claude_sandbox_auth")
+                and looks_like_claude_sandbox_auth_failure(last_text)
+            )
             if claude_host_recovery:
                 message = CLAUDE_OUTSIDE_SANDBOX
                 recovery = "claude_host_recovery"
                 blocker_kind = "claude_sandbox_auth"
-            elif needs_authorization or looks_like_approval_question(last_text):
+            elif needs_authorization or (
+                self.config.notice_enabled("natural_language_approval")
+                and looks_like_approval_question(last_text)
+            ):
                 message = self.config.affirmative_answer
                 recovery = "generic_approval"
                 blocker_kind = "approval_question"
@@ -175,8 +204,9 @@ class Reconciler:
             thread_runtime = self.runtime["threads"].setdefault(project.thread_id, {})
             previous = thread_runtime.get("lastBlockerFingerprint")
             repeats = int(thread_runtime.get("sameBlockerCount", 0)) + 1 if previous == fingerprint else 1
-            thread_runtime["lastBlockerFingerprint"] = fingerprint
-            thread_runtime["sameBlockerCount"] = repeats
+            if self.config.notice_enabled("repeated_blocker"):
+                thread_runtime["lastBlockerFingerprint"] = fingerprint
+                thread_runtime["sameBlockerCount"] = repeats
             report.update({
                 "blockerKind": blocker_kind,
                 "blockerFingerprint": fingerprint,
@@ -197,7 +227,10 @@ class Reconciler:
             report["actions"].append("turn/start")
             report["result"] = "recovery-submitted"
         elif thread_state == "active":
-            report["result"] = "already-active"
+            report["result"] = (
+                "already-active" if self.config.notice_enabled("active_thread")
+                else "notice-disabled"
+            )
         else:
             report["result"] = "continuation-cooldown"
         return await self._finish_report(report, started)
@@ -295,9 +328,11 @@ async def run_once(config: Config, store: StateStore) -> list[dict[str, Any]]:
     started = time.monotonic()
     store.audit("run-started", runId=run_id, projectCount=len(config.projects))
     try:
-        await ensure_daemon(config)
+        if config.notice_enabled("daemon_unavailable"):
+            await ensure_daemon(config)
         handler = AggressiveApprovalHandler(
-            {project.thread_id for project in config.projects}, config.affirmative_answer
+            {project.thread_id for project in config.projects}, config.affirmative_answer,
+            config.notices,
         )
         async with websockets.unix_connect(
             str(config.socket_path), uri="ws://localhost/", compression=None,

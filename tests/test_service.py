@@ -16,5 +16,9 @@ def test_checked_in_service_templates_and_installers():
     assert "OnUnitActiveSec=5min" in timer and "Persistent=true" in timer
     assert macos_installer.stat().st_mode & 0o111
     assert linux_installer.stat().st_mode & 0o111
+    assert "config/projects.example.toml" in macos_installer.read_text()
+    assert "config/projects.example.toml" in linux_installer.read_text()
+    assert 'chmod 600 "$config_path"' in macos_installer.read_text()
+    assert 'chmod 600 "$config_path"' in linux_installer.read_text()
     assert macos_uninstaller.stat().st_mode & 0o111
     assert linux_uninstaller.stat().st_mode & 0o111

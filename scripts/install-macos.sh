@@ -16,7 +16,11 @@ if [[ -z "$monitor_bin" || ! -x "$monitor_bin" ]]; then
   exit 2
 fi
 if [[ ! -f "$config_path" ]]; then
-  echo "error: configuration does not exist: $config_path" >&2
+  mkdir -p "$(dirname "$config_path")"
+  cp "$repo_dir/config/projects.example.toml" "$config_path"
+  chmod 600 "$config_path"
+  echo "Created starter configuration $config_path"
+  echo "Edit its [[project]] entry, then run this installer again." >&2
   exit 2
 fi
 

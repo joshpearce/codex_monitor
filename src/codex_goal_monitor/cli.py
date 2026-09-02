@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import nullcontext
 import json
 import sys
 from pathlib import Path
@@ -32,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(store.load(), indent=2, sort_keys=True))
         return 0
     try:
-        with store.lock():
+        lock = store.lock() if config.notice_enabled("overlapping_run") else nullcontext()
+        with lock:
             reports = asyncio.run(run_once(config, store))
     except AlreadyRunning as exc:
         print(str(exc))

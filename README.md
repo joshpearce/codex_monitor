@@ -73,6 +73,9 @@ installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linu
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. Templates are under [`services`](services).
 On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
 logged out.
+If the requested configuration file does not exist, the installer creates it with mode `0600` from the
+checked-in example and exits before enabling the service. Edit its placeholder `[[project]]`, then rerun
+the installer; this avoids scheduling a knowingly invalid thread ID.
 
 Remove the installed user service without removing monitor configuration or state:
 
@@ -130,6 +133,28 @@ contract for what it currently notices and how it responds.
 | MCP server requests elicitation | Protocol auto-response | Accepts with empty content | Cannot satisfy an elicitation that requires non-empty structured data |
 | Legacy exec or patch approval is requested | Protocol auto-approval | Approves it, for the session where supported | Retained for protocol compatibility |
 | Same blocker text recurs | Same `blockerFingerprint`; incremented `sameBlockerCount` | Records the recurrence, then applies the otherwise selected recovery | It currently reports repetition but does not change strategy or stop automatically |
+
+Each condition has an independently configurable `[notices]` switch:
+
+| Conditions | Switches |
+| --- | --- |
+| Daemon startup; overlapping invocation | `daemon_unavailable`, `overlapping_run` |
+| Unloaded thread | `unloaded_thread` |
+| Paused, blocked, usage-limited, budget-limited Goals | `paused_goal`, `blocked_goal`, `usage_limited_goal`, `budget_limited_goal` |
+| Idle active Goal; already-active thread | `idle_active_goal`, `active_thread` |
+| Complete Goal; absent/disabled Goal | `complete_goal`, `missing_or_disabled_goal` |
+| Goal-objective identity guard | `objective_mismatch` |
+| Natural-language approval; Claude host recovery | `natural_language_approval`, `claude_sandbox_auth` |
+| Command, file, and permission approvals | `command_approval`, `file_change_approval`, `permissions_approval` |
+| User input; MCP elicitation | `user_input`, `mcp_elicitation` |
+| Legacy command and patch approvals | `legacy_exec_approval`, `legacy_patch_approval` |
+| Repeated-blocker fingerprinting | `repeated_blocker` |
+
+Every switch defaults to `true`; the complete block is in
+[`config/projects.example.toml`](config/projects.example.toml). A disabled state-recovery switch reports
+`notice-disabled` and leaves the condition untouched. A disabled protocol switch rejects the automatic
+response, leaving Codex waiting. Disabling `objective_mismatch` removes an important identity guard, and
+disabling `overlapping_run` permits concurrent monitor processes.
 
 > **Trust boundary:** these responses are intentionally aggressive. Command, file, permission, and user
 > input requests are approved without human review for configured threads. Only configure Goals whose

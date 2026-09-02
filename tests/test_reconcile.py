@@ -78,6 +78,18 @@ async def test_blocked_goal_is_reactivated_and_answered(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_disabled_blocked_notice_leaves_goal_untouched(tmp_path):
+    config = replace(make_config(tmp_path), notices={"blocked_goal": False})
+    client = FakeClient(goal_status="blocked")
+    report = await Reconciler(config, client, StateStore(config.state_dir)).reconcile_project(
+        config.projects[0]
+    )
+    assert report["result"] == "notice-disabled"
+    assert not any(method == "thread/goal/set" for method, _ in client.calls)
+    assert not any(method == "turn/start" for method, _ in client.calls)
+
+
+@pytest.mark.asyncio
 async def test_blocked_goal_steers_authorization_when_reactivation_started_turn(tmp_path):
     config = make_config(tmp_path)
     client = FakeClient(thread_status="active", goal_status="blocked")
