@@ -40,13 +40,15 @@ make uninstall-service
 make uninstall
 ```
 
-`make install` installs or replaces the local package using `pipx`. Service targets select launchd or
-systemd from the host operating system. Override paths and commands when needed, for example:
+`make build` uses `uv`, so it does not require the `build` module in Apple’s system Python. `make install`
+installs or replaces the local package using `uv tool`.
+Service targets select launchd or systemd from the host operating system. Override paths and commands
+when needed, for example:
 
 ```sh
 make install-service CONFIG=/path/to/projects.toml
 make test PYTHON=.test-venv/bin/python
-make install PIPX=/absolute/path/to/pipx
+make install UV=/absolute/path/to/uv
 ```
 
 Copy and edit the configuration:

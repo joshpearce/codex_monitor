@@ -1,18 +1,18 @@
 PYTHON ?= python3
-PIPX ?= pipx
+UV ?= uv
 CONFIG ?= $(HOME)/.config/codex-monitor/projects.toml
 SYSTEM := $(shell uname -s)
 
 .PHONY: build test install install-service uninstall uninstall-service
 
 build:
-	$(PYTHON) -m build
+	$(UV) build
 
 test:
 	$(PYTHON) -m pytest
 
 install:
-	$(PIPX) install --force .
+	$(UV) tool install --force .
 
 install-service:
 ifeq ($(SYSTEM),Darwin)
@@ -25,7 +25,7 @@ else
 endif
 
 uninstall:
-	$(PIPX) uninstall codex-goal-monitor
+	$(UV) tool uninstall codex-goal-monitor
 
 uninstall-service:
 ifeq ($(SYSTEM),Darwin)
