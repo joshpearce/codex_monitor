@@ -96,8 +96,9 @@ installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linu
 On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
 logged out.
 If the requested configuration file does not exist, the installer creates it with mode `0600` from the
-checked-in example and exits before enabling the service. Edit its placeholder `[[project]]`, then rerun
-the installer; this avoids scheduling a knowingly invalid thread ID.
+checked-in example and exits successfully before enabling the service. Edit its placeholder `[[project]]`,
+then rerun the installer; this avoids scheduling a knowingly invalid thread ID without reporting the
+expected first-run setup as a Make failure.
 
 Remove the installed user service without removing monitor configuration or state:
 

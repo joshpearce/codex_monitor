@@ -22,7 +22,7 @@ if [[ ! -f "$config_path" ]]; then
   chmod 600 "$config_path"
   echo "Created starter configuration $config_path"
   echo "Edit its [[project]] entry, then run this installer again." >&2
-  exit 2
+  exit 0
 fi
 
 mkdir -p "$unit_dir"

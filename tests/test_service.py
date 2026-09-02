@@ -22,6 +22,9 @@ def test_checked_in_service_templates_and_installers():
     assert "config/projects.example.toml" in linux_installer.read_text()
     assert 'chmod 600 "$config_path"' in macos_installer.read_text()
     assert 'chmod 600 "$config_path"' in linux_installer.read_text()
+    assert 'echo "Edit its [[project]] entry, then run this installer again."' in macos_installer.read_text()
+    assert "exit 0" in macos_installer.read_text()
+    assert "exit 0" in linux_installer.read_text()
 
 
 def test_makefile_exposes_package_and_service_lifecycle():
