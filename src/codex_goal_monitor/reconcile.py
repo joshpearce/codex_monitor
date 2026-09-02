@@ -134,11 +134,16 @@ class Reconciler:
             report["actions"].append(f"goal/{goal_status}->active")
 
         thread_state = status_type(thread)
-        if thread_state != "active" and self._cooldown_elapsed(project.thread_id):
+        needs_authorization = goal_status in {"paused", "blocked"}
+        # turn/start also steers an already-active turn. This matters because
+        # goal/set(active) can synchronously start an automatic continuation;
+        # the authorization must be injected into that turn rather than lost.
+        should_send = thread_state != "active" or needs_authorization
+        if should_send and self._cooldown_elapsed(project.thread_id):
             last_text = await self._last_assistant_text(project.thread_id)
             message = (
                 self.config.affirmative_answer
-                if goal_status in {"paused", "blocked"} or looks_like_approval_question(last_text)
+                if needs_authorization or looks_like_approval_question(last_text)
                 else CONTINUATION
             )
             params = {
@@ -164,13 +169,16 @@ class Reconciler:
             })
         except ProtocolError:
             return ""
-        for item in unwrap(result, "data") or []:
+        for entry in unwrap(result, "data") or []:
+            item = entry.get("item", entry) if isinstance(entry, dict) else entry
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
             kind = str(item.get("type", "")).lower()
             if role != "assistant" and "agentmessage" not in kind and "agent_message" not in kind:
                 continue
+            if isinstance(item.get("text"), str):
+                return item["text"]
             content = item.get("content", "")
             if isinstance(content, str):
                 return content

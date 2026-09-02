@@ -72,6 +72,36 @@ async def test_blocked_goal_is_reactivated_and_answered(tmp_path):
     assert turn["input"][0]["text"].startswith("Yes.")
 
 
+@pytest.mark.asyncio
+async def test_blocked_goal_steers_authorization_when_reactivation_started_turn(tmp_path):
+    config = make_config(tmp_path)
+    client = FakeClient(thread_status="active", goal_status="blocked")
+    report = await Reconciler(config, client, StateStore(config.state_dir)).reconcile_project(config.projects[0])
+    assert report["actions"] == ["goal/blocked->active", "turn/start"]
+    turn = next(params for method, params in client.calls if method == "turn/start")
+    assert turn["input"][0]["text"].startswith("Yes.")
+
+
 def test_detects_natural_language_authorization_question():
     assert looks_like_approval_question("Do you authorize sending the repository to Claude?")
     assert not looks_like_approval_question("The build completed successfully.")
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_text_unwraps_thread_item_entry(tmp_path):
+    config = make_config(tmp_path)
+    client = FakeClient()
+
+    async def call(method, params):
+        assert method == "thread/items/list"
+        return {"data": [{
+            "turnId": "turn-1",
+            "item": {
+                "type": "agentMessage",
+                "text": "Do you authorize the review?",
+            },
+        }]}
+
+    client.call = call
+    text = await Reconciler(config, client, StateStore(config.state_dir))._last_assistant_text("thread-1")
+    assert text == "Do you authorize the review?"

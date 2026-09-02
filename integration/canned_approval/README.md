@@ -14,7 +14,8 @@ The fixture is deliberately shaped to reach a natural-language authority boundar
 
    > Yes. I approve and authorize the requested action. Continue working toward the full goal.
 
-6. The test verifies that the same Goal becomes active and advances beyond its authorization question.
+6. The test verifies that implementation files exist before approval, the blocker actually asks about
+   Claude authorization, the same Goal becomes active, and a real Claude command starts afterward.
 
 The live test is skipped unless both `RUN_CODEX_GOAL_INTEGRATION=1` and
 `CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1` are set. Enabling the second variable explicitly

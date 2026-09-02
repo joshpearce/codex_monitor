@@ -57,6 +57,39 @@ async def latest_items(client: ProtocolClient, thread_id: str) -> list[dict]:
     return unwrap(result, "data") or []
 
 
+def assistant_texts(items: list[dict]) -> list[str]:
+    texts = []
+    for entry in items:
+        item = entry.get("item", entry) if isinstance(entry, dict) else entry
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type", "")).lower()
+        if item.get("role") != "assistant" and "agentmessage" not in kind and "agent_message" not in kind:
+            continue
+        if isinstance(item.get("text"), str):
+            texts.append(item["text"])
+            continue
+        content = item.get("content", "")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            texts.append("\n".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict)
+            ))
+    return texts
+
+
+def contains_claude_command(items: list[dict]) -> bool:
+    for entry in items:
+        item = entry.get("item", entry) if isinstance(entry, dict) else entry
+        if not isinstance(item, dict):
+            continue
+        command = item.get("command")
+        if command and "claude" in json.dumps(command).lower():
+            return True
+    return False
+
+
 @pytest.mark.asyncio
 async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: Path):
     require_opt_in()
@@ -78,6 +111,7 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
         started = await creator.call("thread/start", {
             "cwd": str(project_path),
             "runtimeWorkspaceRoots": [str(project_path)],
+            "sandbox": "workspace-write",
             "approvalPolicy": "never",
             "approvalsReviewer": "auto_review",
             "historyMode": "paginated",
@@ -98,9 +132,13 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
         })
         blocked = await wait_for_goal(creator, thread_id, "blocked", timeout=1800)
         items_before = await latest_items(creator, thread_id)
-        transcript_before = json.dumps(items_before).lower()
-        assert "claude" in transcript_before
-        assert "authoriz" in transcript_before or "approval" in transcript_before
+        questions = [text.lower() for text in assistant_texts(items_before)]
+        assert any(
+            "claude" in text and ("authoriz" in text or "approval" in text) and "?" in text
+            for text in questions
+        ), questions[:5]
+        assert (project_path / "pyproject.toml").exists(), "Goal blocked before implementing the package"
+        assert (project_path / "src/tiny_image_converter").is_dir(), "package implementation is missing"
     finally:
         await creator.ws.close()
 
@@ -123,11 +161,10 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
         assert active["objective"] == blocked["objective"]
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
-            transcript_after = json.dumps(await latest_items(verifier, thread_id)).lower()
-            if "authorization received" in transcript_after or "claude -p" in transcript_after:
+            if contains_claude_command(await latest_items(verifier, thread_id)):
                 break
             await asyncio.sleep(5)
         else:
-            raise AssertionError("Goal resumed but did not acknowledge authorization or enter Claude review")
+            raise AssertionError("Goal resumed but no Claude command started")
     finally:
         await verifier.ws.close()
