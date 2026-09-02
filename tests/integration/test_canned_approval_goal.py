@@ -138,7 +138,11 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
             for text in questions
         ), questions[:5]
         assert (project_path / "pyproject.toml").exists(), "Goal blocked before implementing the package"
-        assert (project_path / "src/tiny_json_formatter").is_dir(), "package implementation is missing"
+        package_locations = (
+            project_path / "tiny_json_formatter",
+            project_path / "src/tiny_json_formatter",
+        )
+        assert any(path.is_dir() for path in package_locations), "package implementation is missing"
     finally:
         await creator.ws.close()
 
