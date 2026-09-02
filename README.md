@@ -63,6 +63,21 @@ codex-goal-monitor uninstall
 On Linux, `install` enables `codex-goal-monitor.timer` for the current user. Run
 `loginctl enable-linger "$USER"` separately if it should operate while the user is logged out.
 
+Checked-in service templates and standalone installers are also available:
+
+```sh
+# macOS LaunchAgent
+scripts/install-macos.sh ~/.config/codex-monitor/projects.toml
+
+# Linux systemd user service and timer
+scripts/install-systemd-user.sh ~/.config/codex-monitor/projects.toml
+```
+
+Both scripts resolve `codex-goal-monitor` from `PATH`. Set `CODEX_GOAL_MONITOR_BIN` to an absolute
+executable path when it is installed somewhere not present in the installer shell's `PATH`. The macOS
+installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linux installer writes into
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. Templates are under [`services`](services).
+
 ## Reconciliation behavior
 
 Each invocation:

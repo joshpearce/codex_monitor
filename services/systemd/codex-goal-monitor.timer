@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile Codex Goals every five minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+Persistent=true
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target

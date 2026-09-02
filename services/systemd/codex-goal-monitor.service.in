@@ -1,0 +1,7 @@
+[Unit]
+Description=Reconcile configured Codex Goals
+
+[Service]
+Type=oneshot
+ExecStart="@EXECUTABLE@" --config "@CONFIG@" reconcile
+TimeoutStartSec=2min
