@@ -90,6 +90,18 @@ explicitly configured thread without installing a timer. It takes a read-only be
 reconciliation, waits briefly, and takes an after snapshot. Its companion TOML pins both the thread ID and
 the complete Goal objective so a stale or mistaken target fails before mutation.
 
+The reusable black-box suite lives under [`integration/canned_approval`](integration/canned_approval).
+It copies a contrived image-converter project to a temporary directory, creates a new Codex thread and
+durable Goal, waits for the mandatory Claude Opus review to reach its explicit-authorization gate, and
+then verifies that the monitor's generic canned approval resumes the Goal into review. It is skipped by
+default because a successful run sends the disposable project to Claude and consumes subscription quota.
+
+```sh
+RUN_CODEX_GOAL_INTEGRATION=1 \
+CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1 \
+.test-venv/bin/pytest -m integration -s tests/integration/test_canned_approval_goal.py
+```
+
 ## Development
 
 ```sh
