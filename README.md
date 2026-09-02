@@ -1,166 +1,162 @@
 # Codex Goal Monitor
 
-`codex-goal-monitor` is an intentionally aggressive, one-shot supervisor for trusted Codex projects.
-It starts the user's Codex app-server daemon if necessary, reconnects to configured threads, reactivates
-paused or blocked Goals, starts a continuation when a Goal is idle, and approves requests received
-during the reconciliation window.
+Codex Goal Monitor keeps selected Codex Goals moving without requiring you to watch them continuously.
+Every five minutes, it checks the exact Codex threads you configured, restarts an idle Goal, recovers a
+paused or blocked Goal, and answers approval requests encountered during that recovery window.
 
-It runs every five minutes as a macOS LaunchAgent or Linux `systemd --user` timer and does not depend
-on a permanent WebSocket connection.
+It is a small, one-shot supervisor rather than a permanently connected service. On macOS it runs as a
+LaunchAgent; on Linux it runs as a `systemd --user` timer.
 
-> This program deliberately removes safety pauses for explicitly configured threads. Only list projects
-> whose Goals and host environment you trust.
+> **Important:** the monitor automatically approves commands, file changes, permissions, and user-input
+> requests for configured threads. Use it only with Goals, repositories, instructions, external services,
+> and host environments that you trust.
 
-The protocol investigation is preserved in
-[`docs/protocol-recovery-notes.md`](docs/protocol-recovery-notes.md).
+## Quick start
 
-## Requirements and installation
+### 1. Check the prerequisites
 
+You need:
+
+- macOS or Linux
 - Python 3.11 or newer
-- A Codex CLI with `codex app-server daemon`
-- App-server protocol compatible with Codex CLI 0.152.1
+- [`uv`](https://docs.astral.sh/uv/)
+- a Codex CLI that provides `codex app-server daemon` and is compatible with app-server protocol 0.152.1
+- an existing Codex thread with a Goal
 
-Install with `pipx`, or create a development environment:
+### 2. Install the monitor
 
-```sh
-pipx install /path/to/codex_monitor
-
-python3 -m venv .venv
-.venv/bin/pip install -e '.[test]'
-```
-
-The Makefile provides the standard package and service lifecycle:
+From this repository, run:
 
 ```sh
-make build
-make test
 make install
+```
+
+This installs or replaces the `codex-goal-monitor` command with `uv tool`.
+
+### 3. Create the configuration
+
+Run the service installer once:
+
+```sh
 make install-service
-make uninstall-service
-make uninstall
 ```
 
-`make build` uses `uv`, so it does not require the `build` module in Apple’s system Python. `make install`
-installs or replaces the local package using `uv tool`.
-Service targets select launchd or systemd from the host operating system. Override paths and commands
-when needed, for example:
+On the first run, it creates `~/.config/codex-monitor/projects.toml` with mode `0600` and stops so that
+you can replace the example project safely. Edit its `[[project]]` entry:
 
-```sh
-make install-service CONFIG=/path/to/projects.toml
-make test UV=/absolute/path/to/uv
-make install UV=/absolute/path/to/uv
+```toml
+[[project]]
+name = "my-project"
+path = "/absolute/path/to/my-project"
+thread_id = "the-exact-codex-thread-id"
+goal_objective = "the exact Goal objective"
+ensure_goal_running = true
 ```
 
-Copy and edit the configuration:
+Use the exact thread ID shown by the Codex TUI or another trusted source. The project path alone is not a
+reliable identity because the thread's recorded working directory may differ from the repository that
+contains its Goal. `goal_objective` is an optional but recommended identity check: if the live objective
+does not match it exactly, the monitor refuses to modify the thread.
 
-```sh
-mkdir -p ~/.config/codex-monitor
-cp config/projects.example.toml ~/.config/codex-monitor/projects.toml
-```
-
-Use exact Codex thread IDs. A project path is not a reliable identity because a thread's recorded working
-directory can differ from the repository containing its Goal.
-
-For each autonomous project, put this in `<project>/.codex/config.toml`:
+For every project you monitor, add this project-local Codex configuration at
+`<project>/.codex/config.toml`:
 
 ```toml
 approval_policy = "never"
 approvals_reviewer = "auto_review"
 ```
 
-The project must be trusted by Codex. Project-local settings are preferred; the monitor does not override
-them unless `[defaults]` in `projects.toml` explicitly requests overrides.
+The project must also be trusted by Codex.
 
-## Usage
+### 4. Start monitoring and verify it
+
+Rerun the installer to install the service, reconcile immediately, and schedule future runs every five
+minutes:
 
 ```sh
-codex-goal-monitor reconcile
+make install-service
+```
+
+Once the app-server daemon is running, you can verify the configured live state without changing it:
+
+```sh
 codex-goal-monitor inspect
-codex-goal-monitor status
 ```
 
-Install the checked-in service template for your platform with:
+That is the complete basic setup. If `inspect` reports the expected thread and Goal, the monitor is
+ready to keep working on it.
+
+## Everyday commands
+
+The installed service runs reconciliation automatically. These commands are useful for manual checks:
 
 ```sh
-# macOS LaunchAgent
-scripts/install-macos.sh ~/.config/codex-monitor/projects.toml
-
-# Linux systemd user service and timer
-scripts/install-systemd-user.sh ~/.config/codex-monitor/projects.toml
+codex-goal-monitor inspect      # Read live thread and Goal state without changing it
+codex-goal-monitor reconcile    # Run one reconciliation immediately
+codex-goal-monitor status       # Show the most recently saved monitor state
 ```
 
-Both scripts resolve `codex-goal-monitor` from `PATH`. Set `CODEX_GOAL_MONITOR_BIN` to an absolute
-executable path when it is installed somewhere not present in the installer shell's `PATH`. The macOS
-installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linux installer writes into
-`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. Templates are under [`services`](services).
-On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
-logged out.
-The rendered service also captures the installer shell's `PATH`, allowing the monitor to find `codex`
-when launchd or systemd would otherwise provide only a restricted service path.
-If the requested configuration file does not exist, the installer creates it with mode `0600` from the
-checked-in example and exits successfully before enabling the service. Edit its placeholder `[[project]]`,
-then rerun the installer; this avoids scheduling a knowingly invalid thread ID without reporting the
-expected first-run setup as a Make failure.
-
-Remove the installed user service without removing monitor configuration, runtime state, audit history,
-or service logs:
+To remove only the scheduled service, while retaining configuration, state, audit history, and logs:
 
 ```sh
-# macOS
-scripts/uninstall-macos.sh
-
-# Linux
-scripts/uninstall-systemd-user.sh
+make uninstall-service
 ```
 
-## Reconciliation behavior
+To remove the installed command as well:
+
+```sh
+make uninstall
+```
+
+Use a non-default configuration file by passing `CONFIG` to the service target and `--config` to manual
+commands:
+
+```sh
+make install-service CONFIG=/path/to/projects.toml
+codex-goal-monitor --config /path/to/projects.toml inspect
+```
+
+## What happens during reconciliation
 
 Each invocation:
 
-1. Takes a non-blocking per-user lock; overlapping runs exit successfully.
-2. Runs `codex app-server daemon start` and waits for its Unix socket.
-3. Connects with WebSocket compression disabled and initializes the protocol.
-4. Records compact before-state fields for each exact thread and Goal before changing it.
-5. Resumes unloaded threads; resume may start an active Goal automatically.
-6. Changes `paused`, `blocked`, `usageLimited`, or `budgetLimited` back to `active`.
-7. Starts a continuation when the Goal is active but the thread is idle.
-8. Accepts approval and user-input requests received during a short drain window.
-9. Writes private state and an append-only audit log under `~/.local/state/codex-monitor/`.
+1. Takes a non-blocking per-user lock. An overlapping run exits successfully.
+2. Starts `codex app-server daemon` if needed and waits for its Unix socket.
+3. Connects to the app-server and reads each configured thread and Goal.
+4. Refuses to act if a configured `goal_objective` does not match.
+5. Resumes an unloaded thread.
+6. Changes a `paused`, `blocked`, `usageLimited`, or `budgetLimited` Goal back to `active`.
+7. Starts a continuation when the Goal is active but its thread is idle.
+8. Approves requests received during a short drain window.
+9. Saves private state and an append-only audit log under `~/.local/state/codex-monitor/`.
 
-A configured `goal_objective` is an identity check. A mismatch fails that project without modifying it.
-Completed Goals and projects without a Goal are left alone. A 240-second continuation cooldown prevents
-duplicate starts while permitting the next regular five-minute invocation to recover an idle Goal.
+Completed Goals and threads without a Goal are left untouched. A 240-second cooldown prevents duplicate
+continuations while allowing the next regular run to recover an idle Goal.
 
-See [`config/projects.example.toml`](config/projects.example.toml) for all common settings.
+## Logs and audit history
 
-## Handled conditions
+Every reconciliation prints compact JSON. Platform service logs are available at:
 
-The monitor acts only on explicitly configured thread IDs. The following table is the operator-facing
-contract for what it currently notices and how it responds.
+- macOS: `~/Library/Logs/codex-goal-monitor.log` and
+  `~/Library/Logs/codex-goal-monitor.error.log`
+- Linux: `journalctl --user -u codex-goal-monitor.service --since today`
 
-| Notice | Classification / audit value | Response | Important limitation |
-| --- | --- | --- | --- |
-| Codex app-server daemon is unavailable | Run-level startup condition | Runs `codex app-server daemon start`, then waits for the Unix socket | A startup failure ends the run and is recorded as `run-failed` |
-| Another monitor invocation holds the lock | Overlapping run | Exits successfully without touching any thread | The skipped invocation does not wait for the first one |
-| Configured thread is unloaded or `notLoaded` | Thread recovery | Calls `thread/resume` with configured approval overrides | Resume may itself start a Goal turn |
-| Goal is `paused` or `blocked` | Usually `approval_question` | Changes the Goal to `active` and starts or steers a turn with the configured generic affirmative answer | This deliberately treats configured blocked Goals as authorized unless a more specific classifier matches |
-| Goal is `usageLimited` or `budgetLimited` | Recoverable Goal state | Changes the Goal to `active`; starts a continuation if the thread is idle | It does not acquire quota or change an actual account limit, so repeated failures may remain unchanged |
-| Goal is active and thread is idle | `idle_or_unknown` / `continuation` | Starts a turn asking Codex to resolve the previous stop and continue the full Goal | A cooldown suppresses duplicate continuation turns |
-| Goal and thread are both active | `already-active` | Makes no turn change and observes state again on the next timer run | It does not determine whether an active turn is making useful progress |
-| Goal is complete | `complete` | Leaves it untouched | Completed Goals are not reopened |
-| Goal is missing or project monitoring is disabled | `disabled-or-no-goal` | Leaves the thread untouched | The monitor does not create Goals from configuration |
-| Goal objective differs from configured `goal_objective` | Project error | Refuses to modify the thread | Exact objective matching is an identity guard |
-| Assistant asks a natural-language authorization question | `approval_question` / `generic_approval` | Sends the configured generic affirmative answer in a new or active turn | Detection is keyword-based and can miss unfamiliar wording |
-| Claude reports unauthenticated status, requests `claude /login`, or reports no host-side runner | `claude_sandbox_auth` / `claude_host_recovery` | Instructs Codex to use the already-authorized host Claude credentials and requests `danger-full-access` for the turn | A thread created without host execution cannot reliably be upgraded later; create such threads with host access initially |
-| Codex requests command execution approval | Protocol auto-approval | Chooses `acceptForSession` when offered, otherwise `accept` | Applies only to configured thread IDs |
-| Codex requests file-change approval | Protocol auto-approval | Returns `accept` | Applies only to configured thread IDs |
-| Codex requests permissions | Protocol auto-approval | Grants the requested permissions for the session with strict auto-review disabled | The requested permission set is accepted as supplied by Codex |
-| Codex requests structured user input | Protocol auto-response | Selects the first offered option, or the generic affirmative answer when there are no options | The first option is not semantically evaluated |
-| MCP server requests elicitation | Protocol auto-response | Accepts with empty content | Cannot satisfy an elicitation that requires non-empty structured data |
-| Legacy exec or patch approval is requested | Protocol auto-approval | Approves it, for the session where supported | Retained for protocol compatibility |
-| Same blocker text recurs | Same `blockerFingerprint`; incremented `sameBlockerCount` | Records the recurrence, then applies the otherwise selected recovery | It currently reports repetition but does not change strategy or stop automatically |
+The monitor also writes a mode-`0600` JSONL audit stream to
+`~/.local/state/codex-monitor/audit.jsonl`. Records include the before and after state, actions, elapsed
+time, recovery strategy, and a redacted blocker fingerprint. Raw assistant blocker text is not logged.
 
-Each condition has an independently configurable `[notices]` switch:
+Useful outcomes include `recovery-submitted`, `already-active`, `continuation-cooldown`, `complete`, and
+`error`. Compare `blockerFingerprint` and `sameBlockerCount` across runs to identify a repeated recovery
+loop.
+
+## Configuration and safety controls
+
+The complete documented configuration is in
+[`config/projects.example.toml`](config/projects.example.toml). Project-local approval settings are
+preferred. The monitor applies approval overrides itself only when `[defaults]` in `projects.toml`
+explicitly requests them.
+
+Every handled condition has a `[notices]` switch, enabled by default:
 
 | Conditions | Switches |
 | --- | --- |
@@ -168,7 +164,7 @@ Each condition has an independently configurable `[notices]` switch:
 | Unloaded thread | `unloaded_thread` |
 | Paused, blocked, usage-limited, budget-limited Goals | `paused_goal`, `blocked_goal`, `usage_limited_goal`, `budget_limited_goal` |
 | Idle active Goal; already-active thread | `idle_active_goal`, `active_thread` |
-| Complete Goal; absent/disabled Goal | `complete_goal`, `missing_or_disabled_goal` |
+| Complete Goal; absent or disabled Goal | `complete_goal`, `missing_or_disabled_goal` |
 | Goal-objective identity guard | `objective_mismatch` |
 | Natural-language approval; Claude host recovery | `natural_language_approval`, `claude_sandbox_auth` |
 | Command, file, and permission approvals | `command_approval`, `file_change_approval`, `permissions_approval` |
@@ -176,68 +172,73 @@ Each condition has an independently configurable `[notices]` switch:
 | Legacy command and patch approvals | `legacy_exec_approval`, `legacy_patch_approval` |
 | Repeated-blocker fingerprinting | `repeated_blocker` |
 
-Every switch defaults to `true`; the complete block is in
-[`config/projects.example.toml`](config/projects.example.toml). A disabled state-recovery switch reports
-`notice-disabled` and leaves the condition untouched. A disabled protocol switch rejects the automatic
-response, leaving Codex waiting. Disabling `objective_mismatch` removes an important identity guard, and
-disabling `overlapping_run` permits concurrent monitor processes.
+A disabled state-recovery switch reports `notice-disabled` and leaves that condition untouched. A
+disabled protocol switch rejects the automatic response, leaving Codex waiting. In particular, disabling
+`objective_mismatch` removes an identity guard, and disabling `overlapping_run` allows concurrent monitor
+processes.
 
-> **Trust boundary:** these responses are intentionally aggressive. Command, file, permission, and user
-> input requests are approved without human review for configured threads. Only configure Goals whose
-> repository, instructions, external-service use, and host environment you are prepared to trust.
+### Detailed behavior and limitations
 
-The Claude-specific failure signatures and the evidence behind that recovery are described in
-[`docs/failure-cases.md`](docs/failure-cases.md). Unknown assistant messages fall back to the normal
-continuation behavior; there is no general LLM-based blocker interpreter yet.
+| Condition | Response | Limitation |
+| --- | --- | --- |
+| App-server daemon is unavailable | Starts it and waits for the socket | Startup failure ends the run as `run-failed` |
+| Another invocation holds the lock | Exits successfully | The skipped run does not wait |
+| Thread is unloaded | Calls `thread/resume` with configured overrides | Resume may start a Goal turn itself |
+| Goal is paused or blocked | Reactivates it and sends the configured affirmative answer | Blocked Goals are treated as authorized unless a specific classifier matches |
+| Goal is usage- or budget-limited | Reactivates it and continues if idle | The monitor cannot acquire quota or change account limits |
+| Active Goal has an idle thread | Sends a continuation request | The cooldown suppresses duplicate turns |
+| Goal and thread are active | Leaves them alone until the next run | It cannot determine whether the active turn is making useful progress |
+| Goal is complete or missing | Leaves the thread alone | The monitor never creates or reopens Goals |
+| Goal objective differs from configuration | Refuses to modify the thread | Matching is exact |
+| Assistant asks for natural-language authorization | Sends the generic affirmative answer | Keyword detection can miss unfamiliar wording |
+| Claude lacks authentication or host execution | Requests host credentials and `danger-full-access` | Threads created without host execution may not be upgradeable later |
+| Codex requests command, file, or permission approval | Accepts it for the configured thread, for the session when supported | Requested permissions are accepted as supplied by Codex |
+| Codex requests structured user input | Selects the first option, or sends the generic affirmative answer | Options are not evaluated semantically |
+| MCP server requests elicitation | Accepts with empty content | Cannot satisfy required non-empty structured data |
+| The same blocker recurs | Records its fingerprint and count, then retries normal recovery | Repetition does not change strategy or stop automatically |
 
-## Observability
-
-Each reconciliation prints compact JSON to stdout. Linux records it in the user journal:
-
-```sh
-journalctl --user -u codex-goal-monitor.service --since today
-```
-
-The macOS LaunchAgent writes stdout and stderr to
-`~/Library/Logs/codex-goal-monitor.log` and `~/Library/Logs/codex-goal-monitor.error.log`.
-
-Both platforms also receive an append-only, mode-`0600` JSONL audit stream at
-`~/.local/state/codex-monitor/audit.jsonl` by default. Every invocation has a UUID `runId` and emits
-`run-started` plus `run-finished` or `run-failed`. Per-project records contain before/after Goal and
-thread states, elapsed time, actions, recovery strategy, a redacted SHA-256 blocker fingerprint, and the
-number of consecutive encounters with that blocker. The raw assistant blocker text is deliberately not
-logged. This makes recurring ineffective recoveries visible without copying repository-derived session
-messages into the service journal.
-
-Useful outcomes include `recovery-submitted`, `already-active`, `continuation-cooldown`, `complete`, and
-`error`. Compare `blockerFingerprint` and `sameBlockerCount` across runs to distinguish progress from a
-five-minute restart loop.
-
-## Opt-in integration harness
-
-The reusable black-box suite lives under [`integration/canned_approval`](integration/canned_approval).
-It copies a tiny standard-library JSON-formatter project to a temporary directory, creates a new Codex thread and
-durable Goal, waits for the mandatory Claude Opus review to reach its explicit-authorization gate, and
-then verifies that the monitor's generic canned approval resumes the Goal into review. It is skipped by
-default because a successful run sends the disposable project to Claude and consumes subscription quota.
-The harness also covers a known second blocker where a sandboxed Claude process cannot access the user's
-credentials; see [`docs/failure-cases.md`](docs/failure-cases.md).
-
-```sh
-RUN_CODEX_GOAL_INTEGRATION=1 \
-CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1 \
-.test-venv/bin/pytest -m integration -s tests/integration/test_canned_approval_goal.py
-```
+Unknown assistant messages fall back to normal continuation behavior; there is no general LLM-based
+blocker interpreter. Claude-specific recovery signatures and their evidence are documented in
+[`docs/failure-cases.md`](docs/failure-cases.md).
 
 ## Development
 
+The Makefile is the primary development interface:
+
 ```sh
-.venv/bin/pytest
+make test
+make build
 ```
 
-The app-server API is experimental. Regenerate its schema after upgrading Codex:
+Override the `uv` executable when necessary:
+
+```sh
+make test UV=/absolute/path/to/uv
+make build UV=/absolute/path/to/uv
+make install UV=/absolute/path/to/uv
+```
+
+The app-server API is experimental. After upgrading Codex, regenerate its schema for investigation with:
 
 ```sh
 schema_dir="$(mktemp -d)"
 codex app-server generate-json-schema --experimental --out "$schema_dir"
+```
+
+Protocol investigation notes are preserved in
+[`docs/protocol-recovery-notes.md`](docs/protocol-recovery-notes.md).
+
+## Opt-in integration test
+
+The black-box integration suite under
+[`integration/canned_approval`](integration/canned_approval) creates a disposable project, Codex thread,
+and durable Goal, then exercises the canned-approval recovery flow. It is skipped by default because a
+successful run sends the project to Claude and consumes subscription quota.
+
+Run it only after intentionally opting into both external review and quota use:
+
+```sh
+RUN_CODEX_GOAL_INTEGRATION=1 \
+CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1 \
+uv run --extra test pytest -m integration -s tests/integration/test_canned_approval_goal.py
 ```
