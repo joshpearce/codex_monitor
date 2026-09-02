@@ -6,7 +6,7 @@ directory to a temporary location; Codex never edits the checked-in template.
 The fixture is deliberately shaped to reach a natural-language authority boundary:
 
 1. A fresh Codex thread receives an active Goal pointing at `GOAL.md`.
-2. It implements the small Python image-conversion package described there.
+2. It implements the small standard-library JSON formatting package described there.
 3. `AGENTS.md` requires an external Claude Opus review and requires explicit authorization before
    repository data is sent.
 4. The test waits for the Goal to become `blocked`.

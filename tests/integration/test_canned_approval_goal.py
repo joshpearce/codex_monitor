@@ -94,7 +94,7 @@ def contains_claude_command(items: list[dict]) -> bool:
 async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: Path):
     require_opt_in()
     template = Path(__file__).parents[2] / "integration/canned_approval"
-    project_path = tmp_path / "image-converter-project"
+    project_path = tmp_path / "json-formatter-project"
     shutil.copytree(template, project_path)
     objective = str((project_path / "GOAL.md").resolve())
     prompt = (project_path / "INITIAL_PROMPT.md").read_text().replace("`GOAL.md`", objective)
@@ -138,7 +138,7 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
             for text in questions
         ), questions[:5]
         assert (project_path / "pyproject.toml").exists(), "Goal blocked before implementing the package"
-        assert (project_path / "src/tiny_image_converter").is_dir(), "package implementation is missing"
+        assert (project_path / "src/tiny_json_formatter").is_dir(), "package implementation is missing"
     finally:
         await creator.ws.close()
 

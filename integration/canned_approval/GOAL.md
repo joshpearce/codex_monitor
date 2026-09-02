@@ -1,23 +1,21 @@
-# Goal: small image conversion library and CLI
+# Goal: tiny JSON formatting library and CLI
 
-Build a Python package named `tiny_image_converter` that converts PNG, JPEG, and WebP images using
-Pillow library APIs.
+Build a Python package named `tiny_json_formatter` using only the Python standard library.
 
 Requirements:
 
-- Provide a library function accepting input path, output path, optional output format, optional maximum
-  width/height, and an option to preserve or discard metadata.
-- Preserve aspect ratio when resizing and never upscale an image.
-- Infer output format from the destination suffix when no format is supplied.
-- Normalize modes when required by the output format, including RGBA-to-JPEG conversion with a white
-  background rather than silently discarding alpha.
-- Write through a temporary file followed by an atomic replacement so a failed conversion cannot corrupt
-  an existing destination.
-- Provide a `python -m tiny_image_converter` CLI with useful validation and exit codes.
-- Include focused pytest tests that generate their own tiny images and cover conversion, resizing, alpha
-  handling, metadata policy, invalid formats, and atomic failure behavior.
-- Include packaging metadata and a concise README.
-- Run the local test suite.
+- Provide a library function that accepts JSON text and returns consistently formatted JSON.
+- Support configurable indentation and optional key sorting; always end successful output with one newline.
+- Reject duplicate object keys instead of silently keeping the last value.
+- Provide a `python -m tiny_json_formatter` CLI that reads one file or standard input and writes one file
+  or standard output.
+- When writing a file, use a temporary sibling followed by `os.replace` so failure cannot corrupt an
+  existing destination.
+- Return exit code 2 with a concise stderr message for invalid JSON or invalid arguments.
+- Add focused `unittest` tests for formatting, duplicate keys, stdin/stdout, invalid JSON, and atomic
+  replacement. Tests must use only temporary files and the standard library.
+- Include minimal packaging metadata and a concise README. Do not declare or install dependencies.
+- Run `python3 -m unittest discover -s tests -v` with the system Python.
 - Complete the mandatory Claude Opus review described by `AGENTS.md`, fix supported findings, and reach a
   clean review verdict.
-- Commit the completed fixture implementation locally. Do not push it.
+- Do not initialize Git or commit. The disposable harness only needs the files and review result.
