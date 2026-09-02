@@ -1,0 +1,17 @@
+version = 1
+drain_seconds = 15
+continuation_cooldown_seconds = 240
+
+# Normally omit these: each trusted project's .codex/config.toml should contain
+# approval_policy = "never" and approvals_reviewer = "auto_review".
+# Set them here only if the reconciler should force overrides while resuming.
+#[defaults]
+#approval_policy = "never"
+#approvals_reviewer = "auto_review"
+
+[[project]]
+name = "example"
+path = "/absolute/path/to/project"
+thread_id = "00000000-0000-0000-0000-000000000000"
+goal_objective = "docs/continuous-goal.md"
+ensure_goal_running = true

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-goal-monitor"
+version = "0.1.0"
+description = "A one-shot reconciler that keeps trusted Codex Goals running"
+requires-python = ">=3.11"
+dependencies = ["websockets>=15,<16"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+codex-goal-monitor = "codex_goal_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
