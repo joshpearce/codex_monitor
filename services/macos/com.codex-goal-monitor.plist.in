@@ -17,6 +17,11 @@
   <integer>300</integer>
   <key>ProcessType</key>
   <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>@LOG_DIR@/codex-goal-monitor.log</string>
   <key>StandardErrorPath</key>

@@ -12,16 +12,29 @@ def test_checked_in_service_templates_and_installers():
 
     assert "<integer>300</integer>" in launchd
     assert "@EXECUTABLE@" in launchd and "@CONFIG@" in launchd
+    assert "@PATH@" in launchd
     assert 'ExecStart="@EXECUTABLE@" --config "@CONFIG@" reconcile' in systemd
+    assert 'Environment="PATH=@PATH@"' in systemd
     assert "OnUnitActiveSec=5min" in timer and "Persistent=true" in timer
     assert macos_installer.stat().st_mode & 0o111
     assert linux_installer.stat().st_mode & 0o111
     assert macos_uninstaller.stat().st_mode & 0o111
     assert linux_uninstaller.stat().st_mode & 0o111
+    for uninstaller in (macos_uninstaller, linux_uninstaller):
+        uninstaller_text = uninstaller.read_text()
+        assert "projects.toml" not in uninstaller_text
+        assert "codex-monitor/audit.jsonl" not in uninstaller_text
+        assert "codex-goal-monitor.log" not in uninstaller_text
     assert "config/projects.example.toml" in macos_installer.read_text()
     assert "config/projects.example.toml" in linux_installer.read_text()
     assert 'chmod 600 "$config_path"' in macos_installer.read_text()
     assert 'chmod 600 "$config_path"' in linux_installer.read_text()
+    assert 'if [[ ! -f "$config_path" ]]' in macos_installer.read_text()
+    assert 'if [[ ! -f "$config_path" ]]' in linux_installer.read_text()
+    assert 'cp "$repo_dir/config/projects.example.toml" "$config_path"' in macos_installer.read_text()
+    assert 'cp "$repo_dir/config/projects.example.toml" "$config_path"' in linux_installer.read_text()
+    assert 'service_env_path="$PATH"' in macos_installer.read_text()
+    assert 'service_env_path="$PATH"' in linux_installer.read_text()
     assert 'echo "Edit its [[project]] entry, then run this installer again."' in macos_installer.read_text()
     assert "exit 0" in macos_installer.read_text()
     assert "exit 0" in linux_installer.read_text()

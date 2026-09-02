@@ -3,5 +3,6 @@ Description=Reconcile configured Codex Goals
 
 [Service]
 Type=oneshot
+Environment="PATH=@PATH@"
 ExecStart="@EXECUTABLE@" --config "@CONFIG@" reconcile
 TimeoutStartSec=2min

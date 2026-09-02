@@ -95,12 +95,15 @@ installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linu
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. Templates are under [`services`](services).
 On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
 logged out.
+The rendered service also captures the installer shell's `PATH`, allowing the monitor to find `codex`
+when launchd or systemd would otherwise provide only a restricted service path.
 If the requested configuration file does not exist, the installer creates it with mode `0600` from the
 checked-in example and exits successfully before enabling the service. Edit its placeholder `[[project]]`,
 then rerun the installer; this avoids scheduling a knowingly invalid thread ID without reporting the
 expected first-run setup as a Make failure.
 
-Remove the installed user service without removing monitor configuration or state:
+Remove the installed user service without removing monitor configuration, runtime state, audit history,
+or service logs:
 
 ```sh
 # macOS

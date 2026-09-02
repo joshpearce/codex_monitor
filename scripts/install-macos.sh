@@ -10,6 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
 config_path="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/codex-monitor/projects.toml}"
 monitor_bin="${CODEX_GOAL_MONITOR_BIN:-$(command -v codex-goal-monitor || true)}"
+service_env_path="$PATH"
 
 if [[ -z "$monitor_bin" || ! -x "$monitor_bin" ]]; then
   echo "error: codex-goal-monitor is not executable; install it or set CODEX_GOAL_MONITOR_BIN" >&2
@@ -31,16 +32,17 @@ mkdir -p "$(dirname "$destination")" "$log_dir"
 
 python3 -c '
 import html, pathlib, sys
-template, destination, executable, config, log_dir = sys.argv[1:]
+template, destination, executable, config, log_dir, env_path = sys.argv[1:]
 text = pathlib.Path(template).read_text()
 for key, value in {
     "@EXECUTABLE@": executable,
     "@CONFIG@": config,
     "@LOG_DIR@": log_dir,
+    "@PATH@": env_path,
 }.items():
     text = text.replace(key, html.escape(value, quote=True))
 pathlib.Path(destination).write_text(text)
-' "$template" "$destination" "$monitor_bin" "$config_path" "$log_dir"
+' "$template" "$destination" "$monitor_bin" "$config_path" "$log_dir" "$service_env_path"
 
 domain="gui/$(id -u)"
 launchctl bootout "$domain" "$destination" 2>/dev/null || true
