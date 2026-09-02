@@ -29,6 +29,26 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[test]'
 ```
 
+The Makefile provides the standard package and service lifecycle:
+
+```sh
+make build
+make test PYTHON=.venv/bin/python
+make install
+make install-service
+make uninstall-service
+make uninstall
+```
+
+`make install` installs or replaces the local package using `pipx`. Service targets select launchd or
+systemd from the host operating system. Override paths and commands when needed, for example:
+
+```sh
+make install-service CONFIG=/path/to/projects.toml
+make test PYTHON=.test-venv/bin/python
+make install PIPX=/absolute/path/to/pipx
+```
+
 Copy and edit the configuration:
 
 ```sh
