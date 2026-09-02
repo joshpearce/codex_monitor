@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -90,47 +91,82 @@ def contains_claude_command(items: list[dict]) -> bool:
     return False
 
 
+def manifest_path() -> Path:
+    configured = os.environ.get("CODEX_INTEGRATION_MANIFEST")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(__file__).parents[2] / ".integration-state/canned-approval.json"
+
+
+def save_manifest(path: Path, *, thread_id: str, project_path: Path, objective: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "thread_id": thread_id,
+        "project_path": str(project_path),
+        "objective": objective,
+    }, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
+
+
 @pytest.mark.asyncio
-async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: Path):
+async def test_generic_canned_answer_resumes_goal_into_claude_review():
     require_opt_in()
     template = Path(__file__).parents[2] / "integration/canned_approval"
-    project_path = tmp_path / "json-formatter-project"
-    shutil.copytree(template, project_path)
-    objective = str((project_path / "GOAL.md").resolve())
-    prompt = (project_path / "INITIAL_PROMPT.md").read_text().replace("`GOAL.md`", objective)
+    saved_path = manifest_path()
+    resumed = saved_path.exists()
+    if resumed:
+        saved = json.loads(saved_path.read_text())
+        project_path = Path(saved["project_path"])
+        thread_id = saved["thread_id"]
+        objective = saved["objective"]
+        assert project_path.is_dir(), (
+            f"saved project is missing: {project_path}; remove stale manifest {saved_path}"
+        )
+    else:
+        run_root = Path(tempfile.mkdtemp(prefix="codex-goal-monitor-integration-", dir="/private/tmp"))
+        project_path = run_root / "json-formatter-project"
+        shutil.copytree(template, project_path)
+        objective = str((project_path / "GOAL.md").resolve())
 
     provisional = Config(
         projects=(Project("fixture", project_path, "pending", objective),),
         socket_path=Path.home() / ".codex/app-server-control/app-server-control.sock",
-        state_dir=tmp_path / "state",
+        state_dir=project_path.parent / "monitor-state",
         drain_seconds=5,
     )
     await ensure_daemon(provisional)
     creator = await connect(provisional)
     try:
-        started = await creator.call("thread/start", {
-            "cwd": str(project_path),
-            "runtimeWorkspaceRoots": [str(project_path)],
-            "sandbox": "workspace-write",
-            "approvalPolicy": "never",
-            "approvalsReviewer": "auto_review",
-            "historyMode": "paginated",
-        })
-        thread = unwrap(started, "thread") or started
-        thread_id = thread.get("id") or thread.get("threadId")
-        assert thread_id, started
-        await creator.call("thread/goal/set", {
-            "threadId": thread_id, "objective": objective, "status": "active"
-        })
-        await creator.call("turn/start", {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": prompt}],
-            "cwd": str(project_path),
-            "approvalPolicy": "never",
-            "approvalsReviewer": "auto_review",
-            "turnTrigger": "codex-goal-monitor-integration",
-        })
+        if not resumed:
+            prompt = (project_path / "INITIAL_PROMPT.md").read_text().replace("`GOAL.md`", objective)
+            started = await creator.call("thread/start", {
+                "cwd": str(project_path),
+                "runtimeWorkspaceRoots": [str(project_path)],
+                "sandbox": "workspace-write",
+                "approvalPolicy": "never",
+                "approvalsReviewer": "auto_review",
+                "historyMode": "paginated",
+            })
+            thread = unwrap(started, "thread") or started
+            thread_id = thread.get("id") or thread.get("threadId")
+            assert thread_id, started
+            save_manifest(
+                saved_path, thread_id=thread_id, project_path=project_path, objective=objective
+            )
+            await creator.call("thread/goal/set", {
+                "threadId": thread_id, "objective": objective, "status": "active"
+            })
+            await creator.call("turn/start", {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "cwd": str(project_path),
+                "approvalPolicy": "never",
+                "approvalsReviewer": "auto_review",
+                "turnTrigger": "codex-goal-monitor-integration",
+            })
         blocked = await wait_for_goal(creator, thread_id, "blocked", timeout=1800)
+        assert blocked["objective"] == objective
         items_before = await latest_items(creator, thread_id)
         questions = [text.lower() for text in assistant_texts(items_before)]
         assert any(
@@ -149,7 +185,7 @@ async def test_generic_canned_answer_resumes_goal_into_claude_review(tmp_path: P
     config = Config(
         projects=(Project("fixture", project_path, thread_id, objective),),
         socket_path=provisional.socket_path,
-        state_dir=tmp_path / "state",
+        state_dir=project_path.parent / "monitor-state",
         drain_seconds=20,
         continuation_cooldown_seconds=0,
         approval_policy="never",

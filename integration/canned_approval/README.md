@@ -22,6 +22,11 @@ The live test is skipped unless both `RUN_CODEX_GOAL_INTEGRATION=1` and
 `CODEX_INTEGRATION_AUTHORIZE_EXTERNAL_REVIEW=1` are set. Enabling the second variable explicitly
 authorizes sending the disposable fixture to Claude and consuming its subscription allowance.
 
+The first run stores its disposable project path and thread ID in
+`.integration-state/canned-approval.json`. If the pytest code fails or changes, the next run resumes that
+same Goal at its current state instead of creating another thread or rebuilding the formatter. The cleanup
+command below deletes the thread, project, and manifest when a genuinely fresh run is wanted.
+
 Run it with:
 
 ```sh
