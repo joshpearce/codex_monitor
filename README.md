@@ -53,6 +53,7 @@ them unless `[defaults]` in `projects.toml` explicitly requests overrides.
 
 ```sh
 codex-goal-monitor reconcile
+codex-goal-monitor inspect
 codex-goal-monitor status
 codex-goal-monitor print-service
 codex-goal-monitor install
@@ -81,6 +82,13 @@ Completed Goals and projects without a Goal are left alone. A 240-second continu
 duplicate starts while permitting the next regular five-minute invocation to recover an idle Goal.
 
 See [`config/projects.example.toml`](config/projects.example.toml) for all common settings.
+
+## Opt-in integration harness
+
+[`scripts/run-example-project-integration.sh`](scripts/run-example-project-integration.sh) exercises one real,
+explicitly configured thread without installing a timer. It takes a read-only before snapshot, runs one
+reconciliation, waits briefly, and takes an after snapshot. Its companion TOML pins both the thread ID and
+the complete Goal objective so a stale or mistaken target fails before mutation.
 
 ## Development
 

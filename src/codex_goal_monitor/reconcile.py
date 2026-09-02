@@ -224,3 +224,37 @@ async def run_once(config: Config, store: StateStore) -> list[dict[str, Any]]:
         for event in handler.events:
             store.audit("auto-approved", **event)
         return reports
+
+
+async def inspect_once(config: Config) -> list[dict[str, Any]]:
+    """Read live state without starting the daemon or changing a thread."""
+    async def reject_server_request(request: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError(f"inspect mode cannot answer {request.get('method')}")
+
+    async with websockets.unix_connect(
+        str(config.socket_path), uri="ws://localhost/", compression=None,
+        open_timeout=config.connect_timeout_seconds, close_timeout=3,
+        max_size=32 * 1024 * 1024,
+    ) as ws:
+        client = ProtocolClient(ws, reject_server_request)
+        await client.initialize()
+        loaded = loaded_ids(await client.call("thread/loaded/list", {}))
+        reports = []
+        for project in config.projects:
+            try:
+                thread = unwrap(await client.call(
+                    "thread/read", {"threadId": project.thread_id, "includeTurns": False}
+                ), "thread")
+                goal = unwrap(await client.call(
+                    "thread/goal/get", {"threadId": project.thread_id}
+                ), "goal")
+                reports.append({
+                    "project": project.name,
+                    "threadId": project.thread_id,
+                    "loaded": project.thread_id in loaded,
+                    "thread": thread,
+                    "goal": goal,
+                })
+            except Exception as exc:
+                reports.append({"project": project.name, "threadId": project.thread_id, "error": str(exc)})
+        return reports

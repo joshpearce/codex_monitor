@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import default_config_path, load_config
-from .reconcile import run_once
+from .reconcile import inspect_once, run_once
 from .service import install, systemd_units, launchd_plist, uninstall
 from .state import AlreadyRunning, StateStore
 
@@ -17,6 +17,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--config", type=Path, default=default_config_path())
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("reconcile", help="run one bounded reconciliation")
+    commands.add_parser("inspect", help="read configured live thread and Goal state without mutation")
     commands.add_parser("status", help="print the most recently persisted state")
     commands.add_parser("install", help="install and enable the current user's timer")
     commands.add_parser("uninstall", help="disable and remove the current user's timer")
@@ -40,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = load_config(args.config)
+    if args.command == "inspect":
+        print(json.dumps(asyncio.run(inspect_once(config)), indent=2, sort_keys=True))
+        return 0
     store = StateStore(config.state_dir)
     if args.command == "status":
         print(json.dumps(store.load(), indent=2, sort_keys=True))
