@@ -74,6 +74,16 @@ installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linu
 On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
 logged out.
 
+Remove the installed user service without removing monitor configuration or state:
+
+```sh
+# macOS
+scripts/uninstall-macos.sh
+
+# Linux
+scripts/uninstall-systemd-user.sh
+```
+
 ## Reconciliation behavior
 
 Each invocation:
