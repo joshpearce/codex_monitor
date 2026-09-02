@@ -35,4 +35,5 @@ def test_makefile_exposes_package_and_service_lifecycle():
     assert "scripts/uninstall-macos.sh" in makefile
     assert "scripts/uninstall-systemd-user.sh" in makefile
     assert "$(UV) build" in makefile
+    assert "$(UV) run --extra test pytest" in makefile
     assert "$(UV) tool install --force ." in makefile

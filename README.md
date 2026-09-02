@@ -33,7 +33,7 @@ The Makefile provides the standard package and service lifecycle:
 
 ```sh
 make build
-make test PYTHON=.venv/bin/python
+make test
 make install
 make install-service
 make uninstall-service
@@ -47,7 +47,7 @@ when needed, for example:
 
 ```sh
 make install-service CONFIG=/path/to/projects.toml
-make test PYTHON=.test-venv/bin/python
+make test UV=/absolute/path/to/uv
 make install UV=/absolute/path/to/uv
 ```
 

@@ -1,4 +1,3 @@
-PYTHON ?= python3
 UV ?= uv
 CONFIG ?= $(HOME)/.config/codex-monitor/projects.toml
 SYSTEM := $(shell uname -s)
@@ -9,7 +8,7 @@ build:
 	$(UV) build
 
 test:
-	$(PYTHON) -m pytest
+	$(UV) run --extra test pytest
 
 install:
 	$(UV) tool install --force .
