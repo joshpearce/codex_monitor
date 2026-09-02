@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -100,7 +101,7 @@ def test_detects_claude_sandbox_auth_failure():
 
 @pytest.mark.asyncio
 async def test_claude_auth_blocker_requests_outside_sandbox(tmp_path):
-    config = make_config(tmp_path)
+    config = replace(make_config(tmp_path), continuation_cooldown_seconds=0)
     client = FakeClient(goal_status="blocked")
 
     original_call = client.call
@@ -114,10 +115,28 @@ async def test_claude_auth_blocker_requests_outside_sandbox(tmp_path):
         return await original_call(method, params)
 
     client.call = call
-    await Reconciler(config, client, StateStore(config.state_dir)).reconcile_project(config.projects[0])
+    first_reconciler = Reconciler(config, client, StateStore(config.state_dir), "run-123")
+    report = await first_reconciler.reconcile_project(config.projects[0])
+    first_reconciler.store.save(first_reconciler.runtime)
     turn = next(params for method, params in client.calls if method == "turn/start")
     assert "outside the Codex command sandbox" in turn["input"][0]["text"]
     assert turn["sandbox"] == "danger-full-access"
+    assert report["runId"] == "run-123"
+    assert report["blockerKind"] == "claude_sandbox_auth"
+    assert report["recoveryStrategy"] == "claude_host_recovery"
+    assert len(report["blockerFingerprint"]) == 16
+    assert report["sameBlockerCount"] == 1
+    assert report["result"] == "recovery-submitted"
+    assert report["afterGoalStatus"] == "active"
+    assert report["afterThreadStatus"] == "active"
+    assert isinstance(report["elapsedMs"], int)
+
+    client.goal_status = "blocked"
+    client.thread_status = "idle"
+    repeated = await Reconciler(
+        config, client, StateStore(config.state_dir), "run-456"
+    ).reconcile_project(config.projects[0])
+    assert repeated["sameBlockerCount"] == 2
 
 
 @pytest.mark.asyncio

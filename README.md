@@ -104,6 +104,29 @@ duplicate starts while permitting the next regular five-minute invocation to rec
 
 See [`config/projects.example.toml`](config/projects.example.toml) for all common settings.
 
+## Observability
+
+Each reconciliation prints compact JSON to stdout. Linux records it in the user journal:
+
+```sh
+journalctl --user -u codex-goal-monitor.service --since today
+```
+
+The macOS LaunchAgent writes stdout and stderr to
+`~/Library/Logs/codex-goal-monitor.log` and `~/Library/Logs/codex-goal-monitor.error.log`.
+
+Both platforms also receive an append-only, mode-`0600` JSONL audit stream at
+`~/.local/state/codex-monitor/audit.jsonl` by default. Every invocation has a UUID `runId` and emits
+`run-started` plus `run-finished` or `run-failed`. Per-project records contain before/after Goal and
+thread states, elapsed time, actions, recovery strategy, a redacted SHA-256 blocker fingerprint, and the
+number of consecutive encounters with that blocker. The raw assistant blocker text is deliberately not
+logged. This makes recurring ineffective recoveries visible without copying repository-derived session
+messages into the service journal.
+
+Useful outcomes include `recovery-submitted`, `already-active`, `continuation-cooldown`, `complete`, and
+`error`. Compare `blockerFingerprint` and `sameBlockerCount` across runs to distinguish progress from a
+five-minute restart loop.
+
 ## Opt-in integration harness
 
 [`scripts/run-example-project-integration.sh`](scripts/run-example-project-integration.sh) exercises one real,

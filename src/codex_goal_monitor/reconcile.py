@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import time
+import uuid
 from typing import Any
 
 import websockets
@@ -83,15 +86,24 @@ async def ensure_daemon(config: Config) -> None:
 
 
 class Reconciler:
-    def __init__(self, config: Config, client: ProtocolClient, store: StateStore):
+    def __init__(
+        self, config: Config, client: ProtocolClient, store: StateStore, run_id: str | None = None
+    ):
         self.config = config
         self.client = client
         self.store = store
+        self.run_id = run_id or str(uuid.uuid4())
         self.runtime = store.load()
         self.runtime.setdefault("threads", {})
 
     async def reconcile_project(self, project: Project) -> dict[str, Any]:
-        report: dict[str, Any] = {"project": project.name, "threadId": project.thread_id, "actions": []}
+        started = time.monotonic()
+        report: dict[str, Any] = {
+            "runId": self.run_id,
+            "project": project.name,
+            "threadId": project.thread_id,
+            "actions": [],
+        }
         # ProtocolClient intentionally has one reader; requests are serialized so
         # notifications and server requests can be dispatched deterministically.
         read_result = await self.client.call(
@@ -101,13 +113,13 @@ class Reconciler:
         loaded_result = await self.client.call("thread/loaded/list", {})
         thread = unwrap(read_result, "thread") or {}
         goal = unwrap(goal_result, "goal")
-        before = {"thread": thread, "goal": goal, "loaded": sorted(loaded_ids(loaded_result))}
-        report["before"] = before
-        self.store.audit("snapshot", project=project.name, threadId=project.thread_id, snapshot=before)
+        report["beforeGoalStatus"] = goal.get("status") if goal else None
+        report["beforeThreadStatus"] = status_type(thread)
+        report["loaded"] = project.thread_id in loaded_ids(loaded_result)
 
         if not project.ensure_goal_running or not goal:
             report["result"] = "disabled-or-no-goal"
-            return report
+            return await self._finish_report(report, started)
         if project.goal_objective and goal.get("objective") != project.goal_objective:
             raise RuntimeError(
                 f"{project.name}: objective mismatch: expected {project.goal_objective!r}, "
@@ -116,7 +128,7 @@ class Reconciler:
         goal_status = goal.get("status")
         if goal_status == "complete":
             report["result"] = "complete"
-            return report
+            return await self._finish_report(report, started)
 
         is_loaded = project.thread_id in loaded_ids(loaded_result) and status_type(thread) != "notLoaded"
         if not is_loaded:
@@ -146,13 +158,31 @@ class Reconciler:
         should_send = thread_state != "active" or needs_authorization
         if should_send and self._cooldown_elapsed(project.thread_id):
             last_text = await self._last_assistant_text(project.thread_id)
+            fingerprint = blocker_fingerprint(last_text) if last_text else None
             claude_host_recovery = looks_like_claude_sandbox_auth_failure(last_text)
             if claude_host_recovery:
                 message = CLAUDE_OUTSIDE_SANDBOX
+                recovery = "claude_host_recovery"
+                blocker_kind = "claude_sandbox_auth"
             elif needs_authorization or looks_like_approval_question(last_text):
                 message = self.config.affirmative_answer
+                recovery = "generic_approval"
+                blocker_kind = "approval_question"
             else:
                 message = CONTINUATION
+                recovery = "continuation"
+                blocker_kind = "idle_or_unknown"
+            thread_runtime = self.runtime["threads"].setdefault(project.thread_id, {})
+            previous = thread_runtime.get("lastBlockerFingerprint")
+            repeats = int(thread_runtime.get("sameBlockerCount", 0)) + 1 if previous == fingerprint else 1
+            thread_runtime["lastBlockerFingerprint"] = fingerprint
+            thread_runtime["sameBlockerCount"] = repeats
+            report.update({
+                "blockerKind": blocker_kind,
+                "blockerFingerprint": fingerprint,
+                "sameBlockerCount": repeats,
+                "recoveryStrategy": recovery,
+            })
             params = {
                 "threadId": project.thread_id,
                 "input": [{"type": "text", "text": message}],
@@ -163,12 +193,28 @@ class Reconciler:
             if claude_host_recovery:
                 params["sandbox"] = "danger-full-access"
             await self.client.call("turn/start", params)
-            self.runtime["threads"].setdefault(project.thread_id, {})["lastContinuationAt"] = int(time.time())
+            thread_runtime["lastContinuationAt"] = int(time.time())
             report["actions"].append("turn/start")
+            report["result"] = "recovery-submitted"
         elif thread_state == "active":
             report["result"] = "already-active"
         else:
             report["result"] = "continuation-cooldown"
+        return await self._finish_report(report, started)
+
+    async def _finish_report(self, report: dict[str, Any], started: float) -> dict[str, Any]:
+        thread_id = report["threadId"]
+        try:
+            thread = unwrap(await self.client.call(
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
+            ), "thread") or {}
+            goal = unwrap(await self.client.call("thread/goal/get", {"threadId": thread_id}), "goal")
+            report["afterThreadStatus"] = status_type(thread)
+            report["afterGoalStatus"] = goal.get("status") if goal else None
+        except ProtocolError as exc:
+            report["postCheckError"] = str(exc)
+        report.setdefault("outcome", report.get("result", "observed"))
+        report["elapsedMs"] = round((time.monotonic() - started) * 1000)
         return report
 
     async def _last_assistant_text(self, thread_id: str) -> str:
@@ -209,7 +255,13 @@ class Reconciler:
                 self.store.audit("reconciled", **report)
                 reports.append(report)
             except Exception as exc:
-                report = {"project": project.name, "threadId": project.thread_id, "error": str(exc)}
+                report = {
+                    "runId": self.run_id,
+                    "project": project.name,
+                    "threadId": project.thread_id,
+                    "outcome": "error",
+                    "error": str(exc),
+                }
                 self.store.audit("error", **report)
                 reports.append(report)
         self.store.save(self.runtime)
@@ -220,6 +272,11 @@ def looks_like_approval_question(text: str) -> bool:
     lowered = text.lower()
     decision_words = ("authorize", "approval", "approve", "permission", "may i", "do you want")
     return bool(text) and ("?" in text or "pending" in lowered) and any(word in lowered for word in decision_words)
+
+
+def blocker_fingerprint(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
 def looks_like_claude_sandbox_auth_failure(text: str) -> bool:
@@ -234,24 +291,39 @@ def looks_like_claude_sandbox_auth_failure(text: str) -> bool:
 
 
 async def run_once(config: Config, store: StateStore) -> list[dict[str, Any]]:
-    await ensure_daemon(config)
-    handler = AggressiveApprovalHandler(
-        {project.thread_id for project in config.projects}, config.affirmative_answer
-    )
-    async with websockets.unix_connect(
-        str(config.socket_path), uri="ws://localhost/", compression=None,
-        open_timeout=config.connect_timeout_seconds, close_timeout=3,
-        max_size=32 * 1024 * 1024,
-    ) as ws:
-        client = ProtocolClient(ws, handler)
-        initialized = await client.initialize()
-        store.audit("connected", initialize=initialized)
-        reconciler = Reconciler(config, client, store)
-        reports = await reconciler.run()
-        await client.drain(config.drain_seconds)
-        for event in handler.events:
-            store.audit("auto-approved", **event)
+    run_id = str(uuid.uuid4())
+    started = time.monotonic()
+    store.audit("run-started", runId=run_id, projectCount=len(config.projects))
+    try:
+        await ensure_daemon(config)
+        handler = AggressiveApprovalHandler(
+            {project.thread_id for project in config.projects}, config.affirmative_answer
+        )
+        async with websockets.unix_connect(
+            str(config.socket_path), uri="ws://localhost/", compression=None,
+            open_timeout=config.connect_timeout_seconds, close_timeout=3,
+            max_size=32 * 1024 * 1024,
+        ) as ws:
+            client = ProtocolClient(ws, handler)
+            await client.initialize()
+            reconciler = Reconciler(config, client, store, run_id)
+            reports = await reconciler.run()
+            await client.drain(config.drain_seconds)
+            for event in handler.events:
+                store.audit("auto-approved", runId=run_id, **event)
+        errors = sum("error" in report for report in reports)
+        store.audit(
+            "run-finished", runId=run_id, outcome="error" if errors else "success",
+            projectCount=len(reports), errorCount=errors,
+            elapsedMs=round((time.monotonic() - started) * 1000),
+        )
         return reports
+    except Exception as exc:
+        store.audit(
+            "run-failed", runId=run_id, errorType=type(exc).__name__, error=str(exc),
+            elapsedMs=round((time.monotonic() - started) * 1000),
+        )
+        raise
 
 
 async def inspect_once(config: Config) -> list[dict[str, Any]]:
