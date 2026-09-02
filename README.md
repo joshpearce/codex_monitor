@@ -215,11 +215,6 @@ five-minute restart loop.
 
 ## Opt-in integration harness
 
-[`scripts/run-example-project-integration.sh`](scripts/run-example-project-integration.sh) exercises one real,
-explicitly configured thread without installing a timer. It takes a read-only before snapshot, runs one
-reconciliation, waits briefly, and takes an after snapshot. Its companion TOML pins both the thread ID and
-the complete Goal objective so a stale or mistaken target fails before mutation.
-
 The reusable black-box suite lives under [`integration/canned_approval`](integration/canned_approval).
 It copies a tiny standard-library JSON-formatter project to a temporary directory, creates a new Codex thread and
 durable Goal, waits for the mandatory Claude Opus review to reach its explicit-authorization gate, and
