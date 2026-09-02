@@ -8,7 +8,6 @@ from pathlib import Path
 
 from .config import default_config_path, load_config
 from .reconcile import inspect_once, run_once
-from .service import install, systemd_units, launchd_plist, uninstall
 from .state import AlreadyRunning, StateStore
 
 
@@ -19,27 +18,11 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("reconcile", help="run one bounded reconciliation")
     commands.add_parser("inspect", help="read configured live thread and Goal state without mutation")
     commands.add_parser("status", help="print the most recently persisted state")
-    commands.add_parser("install", help="install and enable the current user's timer")
-    commands.add_parser("uninstall", help="disable and remove the current user's timer")
-    commands.add_parser("print-service", help="print the service definitions for this OS")
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    if args.command == "uninstall":
-        print("\n".join(map(str, uninstall())))
-        return 0
-    if args.command == "print-service":
-        import platform
-        if platform.system() == "Darwin":
-            sys.stdout.buffer.write(launchd_plist(args.config.expanduser()))
-        else:
-            service, timer = systemd_units(args.config.expanduser())
-            print(service)
-            print(timer)
-        return 0
-
     config = load_config(args.config)
     if args.command == "inspect":
         print(json.dumps(asyncio.run(inspect_once(config)), indent=2, sort_keys=True))
@@ -47,9 +30,6 @@ def main(argv: list[str] | None = None) -> int:
     store = StateStore(config.state_dir)
     if args.command == "status":
         print(json.dumps(store.load(), indent=2, sort_keys=True))
-        return 0
-    if args.command == "install":
-        print("\n".join(map(str, install(args.config.expanduser().resolve()))))
         return 0
     try:
         with store.lock():

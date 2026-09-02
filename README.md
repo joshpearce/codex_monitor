@@ -55,15 +55,9 @@ them unless `[defaults]` in `projects.toml` explicitly requests overrides.
 codex-goal-monitor reconcile
 codex-goal-monitor inspect
 codex-goal-monitor status
-codex-goal-monitor print-service
-codex-goal-monitor install
-codex-goal-monitor uninstall
 ```
 
-On Linux, `install` enables `codex-goal-monitor.timer` for the current user. Run
-`loginctl enable-linger "$USER"` separately if it should operate while the user is logged out.
-
-Checked-in service templates and standalone installers are also available:
+Install the checked-in service template for your platform with:
 
 ```sh
 # macOS LaunchAgent
@@ -77,6 +71,8 @@ Both scripts resolve `codex-goal-monitor` from `PATH`. Set `CODEX_GOAL_MONITOR_B
 executable path when it is installed somewhere not present in the installer shell's `PATH`. The macOS
 installer writes `~/Library/LaunchAgents/com.codex-goal-monitor.plist`; the Linux installer writes into
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. Templates are under [`services`](services).
+On Linux, run `loginctl enable-linger "$USER"` separately if the timer should operate while the user is
+logged out.
 
 ## Reconciliation behavior
 
