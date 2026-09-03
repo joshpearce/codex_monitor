@@ -1,3 +1,4 @@
 # This repository is an explicitly trusted autonomous Goal environment.
 approval_policy = "never"
 approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"

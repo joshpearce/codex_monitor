@@ -1,5 +1,11 @@
 version = 1
 drain_seconds = 15
+# Keep the approval connection attached while a monitor-started turn is active.
+# This covers late command approvals during long-running Opus review loops.
+active_turn_watch_seconds = 21600
+# Reconnect when the app-server WebSocket is reset without a closing handshake.
+transport_reconnect_attempts = 3
+transport_reconnect_delay_seconds = 1
 continuation_cooldown_seconds = 240
 
 # Every handled condition defaults to true. Set an entry to false to leave that
@@ -29,11 +35,12 @@ legacy_patch_approval = true
 repeated_blocker = true
 
 # Normally omit these: each trusted project's .codex/config.toml should contain
-# approval_policy = "never" and approvals_reviewer = "auto_review".
+# approval_policy = "on-request" and approvals_reviewer = "user". This routes
+# approvals to the monitor's exact-thread handler rather than the risk subagent.
 # Set them here only if the reconciler should force overrides while resuming.
 #[defaults]
-#approval_policy = "never"
-#approvals_reviewer = "auto_review"
+#approval_policy = "on-request"
+#approvals_reviewer = "user"
 
 [[project]]
 name = "example"

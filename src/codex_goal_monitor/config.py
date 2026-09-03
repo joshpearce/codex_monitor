@@ -48,7 +48,10 @@ class Config:
     state_dir: Path
     codex_command: str = "codex"
     drain_seconds: float = 15.0
+    active_turn_watch_seconds: float = 21600.0
     connect_timeout_seconds: float = 10.0
+    transport_reconnect_attempts: int = 3
+    transport_reconnect_delay_seconds: float = 1.0
     command_timeout_seconds: float = 30.0
     continuation_cooldown_seconds: int = 240
     approval_policy: str | None = None
@@ -114,7 +117,12 @@ def load_config(path: Path | None = None) -> Config:
         state_dir=Path(raw.get("state_dir", state_home / "codex-monitor")).expanduser(),
         codex_command=str(raw.get("codex_command", "codex")),
         drain_seconds=float(raw.get("drain_seconds", 15)),
+        active_turn_watch_seconds=float(raw.get("active_turn_watch_seconds", 21600)),
         connect_timeout_seconds=float(raw.get("connect_timeout_seconds", 10)),
+        transport_reconnect_attempts=int(raw.get("transport_reconnect_attempts", 3)),
+        transport_reconnect_delay_seconds=float(
+            raw.get("transport_reconnect_delay_seconds", 1)
+        ),
         command_timeout_seconds=float(raw.get("command_timeout_seconds", 30)),
         continuation_cooldown_seconds=int(raw.get("continuation_cooldown_seconds", 240)),
         # Omitted by default: project-local Codex config remains authoritative.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 
@@ -9,10 +10,12 @@ class AggressiveApprovalHandler:
     def __init__(
         self, managed_thread_ids: set[str], affirmative_answer: str,
         notices: dict[str, bool] | None = None,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.managed_thread_ids = managed_thread_ids
         self.affirmative_answer = affirmative_answer
         self.notices = notices or {}
+        self.event_callback = event_callback
         self.events: list[dict[str, Any]] = []
 
     def _managed(self, params: dict[str, Any]) -> bool:
@@ -64,5 +67,8 @@ class AggressiveApprovalHandler:
             result = {"decision": "approved"}
         else:
             raise ValueError(f"unknown server request method {method!r}")
-        self.events.append({"method": method, "threadId": params.get("threadId"), "result": result})
+        event = {"method": method, "threadId": params.get("threadId"), "result": result}
+        self.events.append(event)
+        if self.event_callback:
+            self.event_callback(event)
         return result

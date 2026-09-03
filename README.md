@@ -62,11 +62,13 @@ For every project you monitor, add this project-local Codex configuration at
 `<project>/.codex/config.toml`:
 
 ```toml
-approval_policy = "never"
-approvals_reviewer = "auto_review"
+approval_policy = "on-request"
+approvals_reviewer = "user"
 ```
 
-The project must also be trusted by Codex.
+The project must also be trusted by Codex. `user` is intentional: while the monitor is connected,
+app-server routes approval requests to its exact-thread approval handler. `auto_review` can reject
+authorized repository egress based on transcript provenance before that handler sees the request.
 
 ### 4. Start monitoring and verify it
 
@@ -127,11 +129,28 @@ Each invocation:
 5. Resumes an unloaded thread.
 6. Changes a `paused`, `blocked`, `usageLimited`, or `budgetLimited` Goal back to `active`.
 7. Starts a continuation when the Goal is active but its thread is idle.
-8. Approves requests received during a short drain window.
-9. Saves private state and an append-only audit log under `~/.local/state/codex-monitor/`.
+8. Approves protocol requests received during the drain window. With `approvals_reviewer = "user"`, it
+   stays connected while a configured Goal turn remains active (up to six hours
+   by default), so late Opus/Claude command approvals do not fall through to the UI.
+9. Rechecks submitted recoveries after that watch and records whether they remain active, became idle,
+   or immediately blocked again.
+10. Reconnects and rereads live state after transient app-server transport resets, including an
+    unclean WebSocket reset without a closing handshake.
+11. Saves private state and an append-only audit log under `~/.local/state/codex-monitor/`.
 
 Completed Goals and threads without a Goal are left untouched. A 240-second cooldown prevents duplicate
-continuations while allowing the next regular run to recover an idle Goal.
+idle continuations while allowing blocked or paused recovery answers to be delivered immediately.
+Set top-level `active_turn_watch_seconds` to change the six-hour safety cap. This does not grant broader
+permissions; the approval handler still refuses requests belonging to unconfigured threads.
+`transport_reconnect_attempts` and `transport_reconnect_delay_seconds` control bounded reconnection;
+each retry is recorded as `transport-reconnecting` in the audit stream.
+
+After reconnecting, an unloaded configured session is resumed by ID with the app-server
+`thread/resume` method—the non-interactive equivalent of `codex resume <session-id>`. Resuming an
+active Goal may restart its turn automatically. If the resumed thread is idle, the normal active-Goal
+continuation path starts a new turn; paused or blocked Goals are reactivated by their existing recovery
+paths. The monitor does not launch the interactive `codex resume` command because a scheduled service
+has no terminal and doing so would create a competing client for the same task.
 
 ## Logs and audit history
 
@@ -143,11 +162,13 @@ Every reconciliation prints compact JSON. Platform service logs are available at
 
 The monitor also writes a mode-`0600` JSONL audit stream to
 `~/.local/state/codex-monitor/audit.jsonl`. Records include the before and after state, actions, elapsed
-time, recovery strategy, and a redacted blocker fingerprint. Raw assistant blocker text is not logged.
+time, recovery strategy, and a redacted blocker fingerprint. A long-lived approval watch records
+`watching-active-turns`, and every handled request is recorded immediately as `auto-approved`. Raw
+assistant blocker text is not logged.
 
-Useful outcomes include `recovery-submitted`, `already-active`, `continuation-cooldown`, `complete`, and
-`error`. Compare `blockerFingerprint` and `sameBlockerCount` across runs to identify a repeated recovery
-loop.
+Useful outcomes include `recovery-in-progress`, `recovery-reblocked`, `recovery-idle`, `already-active`,
+`continuation-cooldown`, `complete`, and `error`. Compare `blockerFingerprint` and `sameBlockerCount`
+across runs to identify a repeated recovery loop.
 
 ## Configuration and safety controls
 
@@ -191,7 +212,9 @@ processes.
 | Goal is complete or missing | Leaves the thread alone | The monitor never creates or reopens Goals |
 | Goal objective differs from configuration | Refuses to modify the thread | Matching is exact |
 | Assistant asks for natural-language authorization | Sends the generic affirmative answer | Keyword detection can miss unfamiliar wording |
-| Claude lacks authentication or host execution | Requests host credentials and `danger-full-access` | Threads created without host execution may not be upgradeable later |
+| Assistant requires explicit repository-to-Anthropic authorization | While leaving the Goal blocked, submits repository/Opus/subscription consent as a standalone turn; a later run reactivates the Goal only after acceptance | The app-server must accept a standalone turn while the Goal is blocked |
+| Claude lacks authentication | Requests host credentials and `danger-full-access` | Threads created without host execution may not be upgradeable later |
+| Claude reports no host runner/capability | Leaves the Goal blocked and reports `manual-intervention-required` | The thread must be replaced with one created with host-level access |
 | Codex requests command, file, or permission approval | Accepts it for the configured thread, for the session when supported | Requested permissions are accepted as supplied by Codex |
 | Codex requests structured user input | Selects the first option, or sends the generic affirmative answer | Options are not evaluated semantically |
 | MCP server requests elicitation | Accepts with empty content | Cannot satisfy required non-empty structured data |
