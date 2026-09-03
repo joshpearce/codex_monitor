@@ -1,7 +1,7 @@
 # Codex Goal Monitor
 
 Codex Goal Monitor keeps selected Codex Goals moving without requiring you to watch them continuously.
-Every five minutes, it checks the exact Codex threads you configured, restarts an idle Goal, recovers a
+Every five minutes, it checks the Codex Goal associated with each configured project, restarts an idle Goal, recovers a
 paused or blocked Goal, and answers approval requests encountered during that recovery window.
 
 It is a small, one-shot supervisor rather than a permanently connected service. On macOS it runs as a
@@ -48,15 +48,19 @@ you can replace the example project safely. Edit its `[[project]]` entry:
 [[project]]
 name = "my-project"
 path = "/absolute/path/to/my-project"
+# Optional bootstrap ID for an existing Goal:
 thread_id = "the-exact-codex-thread-id"
 goal_objective = "the exact Goal objective"
 ensure_goal_running = true
 ```
 
-Use the exact thread ID shown by the Codex TUI or another trusted source. The project path alone is not a
-reliable identity because the thread's recorded working directory may differ from the repository that
-contains its Goal. `goal_objective` is an optional but recommended identity check: if the live objective
-does not match it exactly, the monitor refuses to modify the thread.
+`thread_id` bootstraps an existing Goal and may be omitted to create a fresh thread. The monitor persists
+the current thread ID by resolved project path, so a replacement session can be adopted without manual
+configuration changes. `goal_objective` is required when no bootstrap ID is supplied and remains a recommended
+identity check for existing threads.
+
+On the first mutating `reconcile`, legacy `thread_id` values are persisted to private runtime state and
+removed atomically from `projects.toml`. Read-only `inspect` and `status` commands never migrate files.
 
 For every project you monitor, add this project-local Codex configuration at
 `<project>/.codex/config.toml`:
@@ -140,6 +144,9 @@ Each invocation:
 
 Completed Goals and threads without a Goal are left untouched. A 240-second cooldown prevents duplicate
 idle continuations while allowing blocked or paused recovery answers to be delivered immediately.
+If `waitingOnApproval` persists for `orphaned_approval_seconds` (five minutes by default), the monitor
+retains the old thread, creates a fresh project thread and Goal with the same objective, stores the new
+thread ID in runtime state, and continues from the repository and Goal rather than the corrupt transcript.
 Set top-level `active_turn_watch_seconds` to change the six-hour safety cap. This does not grant broader
 permissions; the approval handler still refuses requests belonging to unconfigured threads.
 `transport_reconnect_attempts` and `transport_reconnect_delay_seconds` control bounded reconnection;

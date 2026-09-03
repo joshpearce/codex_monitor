@@ -7,6 +7,9 @@ active_turn_watch_seconds = 21600
 transport_reconnect_attempts = 3
 transport_reconnect_delay_seconds = 1
 continuation_cooldown_seconds = 240
+# Replace a thread when waitingOnApproval persists across monitor runs and the
+# request is no longer available to any connected client.
+orphaned_approval_seconds = 300
 
 # Every handled condition defaults to true. Set an entry to false to leave that
 # condition untouched (or reject that protocol-level automatic response).
@@ -33,6 +36,7 @@ mcp_elicitation = true
 legacy_exec_approval = true
 legacy_patch_approval = true
 repeated_blocker = true
+orphaned_approval = true
 
 # Normally omit these: each trusted project's .codex/config.toml should contain
 # approval_policy = "on-request" and approvals_reviewer = "user". This routes
@@ -45,6 +49,8 @@ repeated_blocker = true
 [[project]]
 name = "example"
 path = "/absolute/path/to/project"
-thread_id = "00000000-0000-0000-0000-000000000000"
+# Optional bootstrap ID. After startup, the current ID is tracked in runtime
+# state and may change when the monitor replaces a corrupt/orphaned session.
+# thread_id = "00000000-0000-0000-0000-000000000000"
 goal_objective = "docs/continuous-goal.md"
 ensure_goal_running = true

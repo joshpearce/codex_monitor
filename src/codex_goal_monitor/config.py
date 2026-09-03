@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 NOTICE_DEFAULTS = {
@@ -29,6 +31,7 @@ NOTICE_DEFAULTS = {
     "legacy_exec_approval": True,
     "legacy_patch_approval": True,
     "repeated_blocker": True,
+    "orphaned_approval": True,
 }
 
 
@@ -36,7 +39,7 @@ NOTICE_DEFAULTS = {
 class Project:
     name: str
     path: Path
-    thread_id: str
+    thread_id: str | None = None
     goal_objective: str | None = None
     ensure_goal_running: bool = True
 
@@ -54,6 +57,7 @@ class Config:
     transport_reconnect_delay_seconds: float = 1.0
     command_timeout_seconds: float = 30.0
     continuation_cooldown_seconds: int = 240
+    orphaned_approval_seconds: int = 300
     approval_policy: str | None = None
     approvals_reviewer: str | None = None
     affirmative_answer: str = (
@@ -68,6 +72,52 @@ class Config:
 
 def default_config_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "codex-monitor/projects.toml"
+
+
+def migrate_legacy_thread_ids(
+    path: Path, config: Config, runtime: dict[str, Any]
+) -> bool:
+    """Move legacy per-project thread IDs into mutable runtime state.
+
+    Runtime is updated in memory first; the caller must persist it before this
+    function rewrites the configuration file.
+    """
+    legacy = [project for project in config.projects if project.thread_id]
+    if not legacy:
+        return False
+    projects_state = runtime.setdefault("projects", {})
+    for project in legacy:
+        projects_state.setdefault(str(project.path), {}).setdefault(
+            "threadId", project.thread_id
+        )
+
+    source = path.expanduser().read_text()
+    lines = source.splitlines(keepends=True)
+    project_index = -1
+    removed = 0
+    migrated: list[str] = []
+    thread_line = re.compile(r"^\s*thread_id\s*=")
+    for line in lines:
+        if re.match(r"^\s*\[\[project\]\]\s*(?:#.*)?$", line.rstrip("\r\n")):
+            project_index += 1
+        if (
+            project_index >= 0
+            and project_index < len(config.projects)
+            and config.projects[project_index].thread_id
+            and thread_line.match(line)
+        ):
+            removed += 1
+            continue
+        migrated.append(line)
+    if removed != len(legacy):
+        raise ValueError(
+            f"{path}: found {removed} legacy thread_id lines for {len(legacy)} configured projects"
+        )
+    temporary = path.expanduser().with_suffix(path.suffix + ".tmp")
+    temporary.write_text("".join(migrated))
+    os.chmod(temporary, path.expanduser().stat().st_mode & 0o777)
+    temporary.replace(path.expanduser())
+    return True
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -96,8 +146,9 @@ def load_config(path: Path | None = None) -> Config:
     projects = []
     for entry in raw.get("project", []):
         project_path = Path(entry["path"]).expanduser().resolve()
-        thread_id = str(entry["thread_id"]).strip()
-        if not thread_id:
+        raw_thread_id = entry.get("thread_id")
+        thread_id = str(raw_thread_id).strip() if raw_thread_id is not None else None
+        if raw_thread_id is not None and not thread_id:
             raise ValueError(f"{path}: project {entry.get('name', project_path)} has an empty thread_id")
         projects.append(Project(
             name=str(entry.get("name", project_path.name)),
@@ -125,6 +176,7 @@ def load_config(path: Path | None = None) -> Config:
         ),
         command_timeout_seconds=float(raw.get("command_timeout_seconds", 30)),
         continuation_cooldown_seconds=int(raw.get("continuation_cooldown_seconds", 240)),
+        orphaned_approval_seconds=int(raw.get("orphaned_approval_seconds", 300)),
         # Omitted by default: project-local Codex config remains authoritative.
         approval_policy=defaults.get("approval_policy"),
         approvals_reviewer=defaults.get("approvals_reviewer"),

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_goal_monitor.config import load_config
+from codex_goal_monitor.config import load_config, migrate_legacy_thread_ids
 
 
 def test_load_config_preserves_project_approval_settings_by_default(tmp_path: Path):
@@ -49,6 +49,50 @@ path = "/tmp/demo"
 thread_id = "thread-1"
 ''')
     assert load_config(config_path).active_turn_watch_seconds == 900
+
+
+def test_project_thread_id_is_optional_for_project_keyed_startup(tmp_path: Path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text('''
+version = 1
+orphaned_approval_seconds = 600
+[[project]]
+name = "demo"
+path = "/tmp/demo"
+goal_objective = "goal.md"
+''')
+    config = load_config(config_path)
+    assert config.projects[0].thread_id is None
+    assert config.orphaned_approval_seconds == 600
+
+
+def test_migrates_legacy_thread_ids_to_runtime_and_preserves_config(tmp_path: Path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text('''
+version = 1
+# Keep this comment.
+[[project]]
+name = "one"
+path = "/tmp/one"
+thread_id = "thread-1"
+goal_objective = "one.md"
+
+[[project]]
+name = "two"
+path = "/tmp/two"
+goal_objective = "two.md"
+''')
+    config = load_config(config_path)
+    runtime = {"threads": {}}
+
+    assert migrate_legacy_thread_ids(config_path, config, runtime) is True
+
+    rewritten = config_path.read_text()
+    assert "thread_id" not in rewritten
+    assert "# Keep this comment." in rewritten
+    assert 'goal_objective = "one.md"' in rewritten
+    assert runtime["projects"][str(config.projects[0].path)]["threadId"] == "thread-1"
+    assert load_config(config_path).projects[0].thread_id is None
 
 
 def test_load_transport_reconnect_settings(tmp_path: Path):

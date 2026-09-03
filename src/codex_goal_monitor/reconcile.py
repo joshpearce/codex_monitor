@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 import uuid
@@ -20,6 +21,12 @@ CONTINUATION = (
     "Continue working toward the active Goal. Resolve whatever stopped the previous turn, "
     "approve or proceed with all actions needed in this trusted project, and do not stop until "
     "the full Goal is complete."
+)
+REPLACEMENT_CONTINUATION = (
+    "Continue the active Goal in this fresh replacement session. The previous session became "
+    "stuck on an approval request that no connected client could answer. Recover context from the "
+    "Goal objective and the current project files and git state; do not depend on the old session. "
+    "Retry any incomplete final operation and continue until the full Goal is complete."
 )
 CLAUDE_OUTSIDE_SANDBOX = (
     "Run the already-authorized Claude Opus review outside the Codex command sandbox, where Claude "
@@ -93,35 +100,52 @@ async def ensure_daemon(config: Config) -> None:
 
 class Reconciler:
     def __init__(
-        self, config: Config, client: ProtocolClient, store: StateStore, run_id: str | None = None
+        self, config: Config, client: ProtocolClient, store: StateStore, run_id: str | None = None,
+        managed_thread_ids: set[str] | None = None,
     ):
         self.config = config
         self.client = client
         self.store = store
         self.run_id = run_id or str(uuid.uuid4())
+        self.managed_thread_ids = managed_thread_ids
         self.runtime = store.load()
         self.runtime.setdefault("threads", {})
+        self.runtime.setdefault("projects", {})
+
+    def _project_runtime(self, project: Project) -> dict[str, Any]:
+        key = str(project.path)
+        value = self.runtime["projects"].setdefault(key, {})
+        if not value.get("threadId") and project.thread_id:
+            value["threadId"] = project.thread_id
+        return value
+
+    def _thread_id(self, project: Project) -> str | None:
+        return self._project_runtime(project).get("threadId")
 
     async def reconcile_project(self, project: Project) -> dict[str, Any]:
         started = time.monotonic()
+        project_runtime = self._project_runtime(project)
+        thread_id = self._thread_id(project)
+        if not thread_id:
+            return await self._start_replacement(project, project_runtime, None, started)
         report: dict[str, Any] = {
             "runId": self.run_id,
             "project": project.name,
-            "threadId": project.thread_id,
+            "threadId": thread_id,
             "actions": [],
         }
         # ProtocolClient intentionally has one reader; requests are serialized so
         # notifications and server requests can be dispatched deterministically.
         read_result = await self.client.call(
-            "thread/read", {"threadId": project.thread_id, "includeTurns": False}
+            "thread/read", {"threadId": thread_id, "includeTurns": False}
         )
-        goal_result = await self.client.call("thread/goal/get", {"threadId": project.thread_id})
+        goal_result = await self.client.call("thread/goal/get", {"threadId": thread_id})
         loaded_result = await self.client.call("thread/loaded/list", {})
         thread = unwrap(read_result, "thread") or {}
         goal = unwrap(goal_result, "goal")
         report["beforeGoalStatus"] = goal.get("status") if goal else None
         report["beforeThreadStatus"] = status_type(thread)
-        report["loaded"] = project.thread_id in loaded_ids(loaded_result)
+        report["loaded"] = thread_id in loaded_ids(loaded_result)
 
         if not project.ensure_goal_running or not goal:
             report["result"] = "disabled-or-no-goal"
@@ -143,30 +167,42 @@ class Reconciler:
             )
             return await self._finish_report(report, started)
 
-        is_loaded = project.thread_id in loaded_ids(loaded_result) and status_type(thread) != "notLoaded"
+        status = thread.get("status") if isinstance(thread.get("status"), dict) else {}
+        waiting_on_approval = "waitingOnApproval" in (status.get("activeFlags") or [])
+        if waiting_on_approval and self.config.notice_enabled("orphaned_approval"):
+            first_seen = int(project_runtime.setdefault("waitingOnApprovalSince", int(time.time())))
+            report["waitingOnApprovalSince"] = first_seen
+            if time.time() - first_seen >= self.config.orphaned_approval_seconds:
+                return await self._start_replacement(
+                    project, project_runtime, thread_id, started, goal=goal
+                )
+        else:
+            project_runtime.pop("waitingOnApprovalSince", None)
+
+        is_loaded = thread_id in loaded_ids(loaded_result) and status_type(thread) != "notLoaded"
         if not is_loaded:
             if not self.config.notice_enabled("unloaded_thread"):
                 report["result"] = "notice-disabled"
                 return await self._finish_report(report, started)
-            params = {"threadId": project.thread_id, "excludeTurns": True, **overrides(self.config)}
+            params = {"threadId": thread_id, "excludeTurns": True, **overrides(self.config)}
             await self.client.call("thread/resume", params)
             report["actions"].append("thread/resume")
-            after_goal = unwrap(await self.client.call("thread/goal/get", {"threadId": project.thread_id}), "goal")
+            after_goal = unwrap(await self.client.call("thread/goal/get", {"threadId": thread_id}), "goal")
             if after_goal is None:
                 raise RuntimeError(f"{project.name}: Goal disappeared after thread/resume")
             # Resuming an active Goal may start a turn by itself.
             await asyncio.sleep(0.25)
             thread = unwrap(await self.client.call(
-                "thread/read", {"threadId": project.thread_id, "includeTurns": False}
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
             ), "thread") or {}
             goal = after_goal
             goal_status = goal.get("status")
 
-        thread_runtime = self.runtime["threads"].setdefault(project.thread_id, {})
+        thread_runtime = self.runtime["threads"].setdefault(thread_id, {})
         last_text = ""
         repository_authorization_accepted = False
         if goal_status in {"paused", "blocked"}:
-            last_text = await self._last_assistant_text(project.thread_id)
+            last_text = await self._last_assistant_text(thread_id)
             authorization_pending = bool(thread_runtime.get("repositoryAuthorizationPending"))
             monitor_handles_approvals = (
                 self.config.approval_policy == "on-request"
@@ -209,7 +245,7 @@ class Reconciler:
                 # which makes the security layer reject the consent as transcript
                 # data rather than a standalone user message.
                 params = {
-                    "threadId": project.thread_id,
+                    "threadId": thread_id,
                     "input": [{"type": "text", "text": REPOSITORY_EXTERNAL_AUTHORIZATION.format(
                         project_name=project.name
                     )}],
@@ -239,7 +275,7 @@ class Reconciler:
         }.get(goal_status)
         recovery_enabled = not status_notice or self.config.notice_enabled(status_notice)
         if goal_status in RECOVERABLE_GOAL_STATUSES and recovery_enabled:
-            await self.client.call("thread/goal/set", {"threadId": project.thread_id, "status": "active"})
+            await self.client.call("thread/goal/set", {"threadId": thread_id, "status": "active"})
             report["actions"].append(f"goal/{goal_status}->active")
         elif goal_status in RECOVERABLE_GOAL_STATUSES:
             report["result"] = "notice-disabled"
@@ -263,11 +299,11 @@ class Reconciler:
         cooldown_ready = (
             needs_authorization
             or repository_authorization_accepted
-            or self._cooldown_elapsed(project.thread_id)
+            or self._cooldown_elapsed(thread_id)
         )
         if should_send and cooldown_ready:
             if not last_text:
-                last_text = await self._last_assistant_text(project.thread_id)
+                last_text = await self._last_assistant_text(thread_id)
             fingerprint = blocker_fingerprint(last_text) if last_text else None
             claude_host_recovery = (
                 self.config.notice_enabled("claude_sandbox_auth")
@@ -300,7 +336,7 @@ class Reconciler:
                 "recoveryStrategy": recovery,
             })
             params = {
-                "threadId": project.thread_id,
+                "threadId": thread_id,
                 "input": [{"type": "text", "text": message}],
                 "cwd": str(project.path),
                 "turnTrigger": "codex-goal-monitor",
@@ -319,6 +355,68 @@ class Reconciler:
             )
         else:
             report["result"] = "continuation-cooldown"
+        return await self._finish_report(report, started)
+
+    async def _start_replacement(
+        self, project: Project, project_runtime: dict[str, Any], old_thread_id: str | None,
+        started: float, *, goal: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create and adopt a fresh thread when no usable project thread exists."""
+        objective = (goal or {}).get("objective") or project.goal_objective
+        if not project.ensure_goal_running:
+            return {
+                "runId": self.run_id, "project": project.name, "threadId": old_thread_id,
+                "actions": [], "result": "disabled-or-no-thread",
+                "outcome": "disabled-or-no-thread",
+                "elapsedMs": round((time.monotonic() - started) * 1000),
+            }
+        if not objective:
+            raise RuntimeError(
+                f"{project.name}: goal_objective is required to create a replacement thread"
+            )
+        started_thread = await self.client.call("thread/start", {
+            "cwd": str(project.path),
+            "runtimeWorkspaceRoots": [str(project.path)],
+            "historyMode": "paginated",
+            **overrides(self.config),
+        })
+        new_thread = unwrap(started_thread, "thread") or started_thread
+        new_thread_id = new_thread.get("id") or new_thread.get("threadId")
+        if not new_thread_id:
+            raise RuntimeError(f"{project.name}: thread/start returned no thread ID")
+        new_thread_id = str(new_thread_id)
+        if self.managed_thread_ids is not None:
+            self.managed_thread_ids.add(new_thread_id)
+        await self.client.call("thread/goal/set", {
+            "threadId": new_thread_id, "objective": objective, "status": "active",
+        })
+        await self.client.call("turn/start", {
+            "threadId": new_thread_id,
+            "input": [{"type": "text", "text": REPLACEMENT_CONTINUATION}],
+            "cwd": str(project.path),
+            "turnTrigger": "codex-goal-monitor-replacement",
+            **overrides(self.config),
+        })
+        # Adopt only after the new Goal and its first turn both exist. A partial
+        # creation remains untracked and the known-good old ID stays recoverable.
+        project_runtime.update({
+            "threadId": new_thread_id,
+            "previousThreadId": old_thread_id,
+            "replacedAt": int(time.time()),
+        })
+        project_runtime.pop("waitingOnApprovalSince", None)
+        self.runtime["threads"].setdefault(new_thread_id, {})
+        report = {
+            "runId": self.run_id,
+            "project": project.name,
+            "threadId": new_thread_id,
+            "previousThreadId": old_thread_id,
+            "actions": ["thread/start", "goal/create", "turn/start"],
+            "beforeGoalStatus": (goal or {}).get("status"),
+            "beforeThreadStatus": "active" if old_thread_id else None,
+            "result": "replacement-started",
+            "recoveryStrategy": "fresh-thread-after-orphaned-approval" if old_thread_id else "fresh-thread",
+        }
         return await self._finish_report(report, started)
 
     async def _finish_report(self, report: dict[str, Any], started: float) -> dict[str, Any]:
@@ -376,7 +474,7 @@ class Reconciler:
                 report = {
                     "runId": self.run_id,
                     "project": project.name,
-                    "threadId": project.thread_id,
+                    "threadId": self._thread_id(project),
                     "outcome": "error",
                     "error": str(exc),
                 }
@@ -551,8 +649,18 @@ def is_recoverable_transport_error(exc: BaseException) -> bool:
 async def _run_connected(
     config: Config, store: StateStore, run_id: str
 ) -> list[dict[str, Any]]:
+    runtime = store.load()
+    runtime_projects = runtime.get("projects", {})
+    managed_thread_ids = {
+        str(thread_id)
+        for project in config.projects
+        if (thread_id := (
+            (runtime_projects.get(str(project.path), {}) or {}).get("threadId")
+            or project.thread_id
+        ))
+    }
     handler = AggressiveApprovalHandler(
-        {project.thread_id for project in config.projects}, config.affirmative_answer,
+        managed_thread_ids, config.affirmative_answer,
         config.notices,
         lambda event: store.audit("auto-approved", runId=run_id, **event),
     )
@@ -563,7 +671,7 @@ async def _run_connected(
     ) as ws:
         client = ProtocolClient(ws, handler)
         await client.initialize()
-        reconciler = Reconciler(config, client, store, run_id)
+        reconciler = Reconciler(config, client, store, run_id, managed_thread_ids)
         reports = await reconciler.run()
         watched_threads = {
             report["threadId"] for report in reports
@@ -608,6 +716,12 @@ async def drain_recovery_turns(
                 "thread/read", {"threadId": thread_id, "includeTurns": False}
             )
             status = ((result or {}).get("thread") or {}).get("status") or {}
+            # Approval requests aren't replayed to clients that connect later. End
+            # this run promptly so the next scheduled reconciliation can age and
+            # replace a persistently orphaned request instead of watching it for
+            # the full active-turn window.
+            if "waitingOnApproval" in (status.get("activeFlags") or []):
+                return
             if status.get("type") == "active":
                 active = True
                 break
@@ -629,22 +743,33 @@ async def inspect_once(config: Config) -> list[dict[str, Any]]:
         client = ProtocolClient(ws, reject_server_request)
         await client.initialize()
         loaded = loaded_ids(await client.call("thread/loaded/list", {}))
+        try:
+            runtime = json.loads((config.state_dir / "runtime.json").read_text())
+        except FileNotFoundError:
+            runtime = {}
+        runtime_projects = runtime.get("projects", {})
         reports = []
         for project in config.projects:
+            project_state = runtime_projects.get(str(project.path), {})
+            thread_id = project_state.get("threadId") or project.thread_id
+            if not thread_id:
+                reports.append({"project": project.name, "threadId": None, "loaded": False})
+                continue
             try:
                 thread = unwrap(await client.call(
-                    "thread/read", {"threadId": project.thread_id, "includeTurns": False}
+                    "thread/read", {"threadId": thread_id, "includeTurns": False}
                 ), "thread")
                 goal = unwrap(await client.call(
-                    "thread/goal/get", {"threadId": project.thread_id}
+                    "thread/goal/get", {"threadId": thread_id}
                 ), "goal")
                 reports.append({
                     "project": project.name,
-                    "threadId": project.thread_id,
-                    "loaded": project.thread_id in loaded,
+                    "threadId": thread_id,
+                    "configuredThreadId": project.thread_id,
+                    "loaded": thread_id in loaded,
                     "thread": thread,
                     "goal": goal,
                 })
             except Exception as exc:
-                reports.append({"project": project.name, "threadId": project.thread_id, "error": str(exc)})
+                reports.append({"project": project.name, "threadId": thread_id, "error": str(exc)})
         return reports

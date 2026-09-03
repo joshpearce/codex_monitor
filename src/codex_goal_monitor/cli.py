@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from .config import default_config_path, load_config
+from .config import default_config_path, load_config, migrate_legacy_thread_ids
 from .reconcile import inspect_once, run_once
 from .state import AlreadyRunning, StateStore
 
@@ -35,6 +35,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         lock = store.lock() if config.notice_enabled("overlapping_run") else nullcontext()
         with lock:
+            runtime = store.load()
+            if any(project.thread_id for project in config.projects):
+                # Persist adoption before removing bootstrap IDs from config so
+                # interruption cannot leave the monitor without an identity.
+                for project in config.projects:
+                    if project.thread_id:
+                        runtime.setdefault("projects", {}).setdefault(
+                            str(project.path), {}
+                        ).setdefault("threadId", project.thread_id)
+                store.save(runtime)
+                migrate_legacy_thread_ids(args.config, config, runtime)
             reports = asyncio.run(run_once(config, store))
     except AlreadyRunning as exc:
         print(str(exc))

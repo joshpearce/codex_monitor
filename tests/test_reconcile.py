@@ -20,16 +20,19 @@ from codex_goal_monitor.state import StateStore
 
 
 class FakeClient:
-    def __init__(self, *, thread_status="idle", goal_status="active", loaded=True):
+    def __init__(self, *, thread_status="idle", goal_status="active", loaded=True, active_flags=None):
         self.thread_status = thread_status
         self.goal_status = goal_status
         self.loaded = loaded
+        self.active_flags = active_flags or []
         self.calls = []
 
     async def call(self, method, params):
         self.calls.append((method, params))
         if method == "thread/read":
-            return {"thread": {"id": "thread-1", "status": {"type": self.thread_status}}}
+            return {"thread": {"id": params["threadId"], "status": {
+                "type": self.thread_status, "activeFlags": self.active_flags,
+            }}}
         if method == "thread/goal/get":
             return {"goal": {"threadId": "thread-1", "objective": "goal.md", "status": self.goal_status}}
         if method == "thread/loaded/list":
@@ -40,6 +43,11 @@ class FakeClient:
             self.loaded = True
             self.thread_status = "active"
             return {"thread": {}}
+        if method == "thread/start":
+            self.loaded = True
+            self.thread_status = "idle"
+            self.active_flags = []
+            return {"thread": {"id": "thread-2"}}
         if method == "thread/goal/set":
             self.goal_status = params["status"]
             return {"goal": {}}
@@ -185,6 +193,42 @@ async def test_crashed_idle_session_resumes_goal_with_session_id(tmp_path):
     resume = next(params for method, params in client.calls if method == "thread/resume")
     assert resume["threadId"] == config.projects[0].thread_id
     assert report["actions"] == ["thread/resume", "turn/start"]
+
+
+@pytest.mark.asyncio
+async def test_orphaned_approval_replaces_thread_and_adopts_new_id(tmp_path):
+    config = replace(make_config(tmp_path), orphaned_approval_seconds=300)
+    store = StateStore(config.state_dir)
+    store.save({
+        "threads": {},
+        "projects": {"/tmp/demo": {
+            "threadId": "thread-1", "waitingOnApprovalSince": 1,
+        }},
+    })
+    client = FakeClient(thread_status="active", active_flags=["waitingOnApproval"])
+    reconciler = Reconciler(config, client, store, managed_thread_ids={"thread-1"})
+
+    report = await reconciler.reconcile_project(config.projects[0])
+
+    assert report["result"] == "replacement-started"
+    assert report["previousThreadId"] == "thread-1"
+    assert report["threadId"] == "thread-2"
+    assert reconciler.runtime["projects"]["/tmp/demo"]["threadId"] == "thread-2"
+    assert "thread-2" in reconciler.managed_thread_ids
+    methods = [method for method, _ in client.calls]
+    assert methods.index("thread/start") < methods.index("thread/goal/set") < methods.index("turn/start")
+
+
+@pytest.mark.asyncio
+async def test_fresh_approval_wait_is_observed_without_replacement(tmp_path):
+    config = replace(make_config(tmp_path), orphaned_approval_seconds=300)
+    client = FakeClient(thread_status="active", active_flags=["waitingOnApproval"])
+    reconciler = Reconciler(config, client, StateStore(config.state_dir))
+
+    report = await reconciler.reconcile_project(config.projects[0])
+
+    assert report["result"] == "already-active"
+    assert not any(method == "thread/start" for method, _ in client.calls)
 
 
 @pytest.mark.asyncio
